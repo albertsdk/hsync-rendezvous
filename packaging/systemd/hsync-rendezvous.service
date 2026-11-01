@@ -97,7 +97,10 @@ ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
 ProcSubset=pid
-RestrictAddressFamilies=AF_INET AF_INET6
+# The node announces READY=1 via a hand-rolled AF_UNIX sd_notify datagram, so
+# AF_UNIX stays allowed even though the QUIC listeners are AF_INET/AF_INET6;
+# without it a Type=notify start never becomes active (systemd start timeout).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
