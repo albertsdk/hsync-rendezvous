@@ -221,7 +221,12 @@ Notes:
    be at least 32 characters: the key is the bucket token's only entropy, so a
    shorter value is a configuration error (exit code 2) on the node. A client may
    instead use `HSYNC_P2P_PASSPHRASE` (at least 12 characters), which it derives
-   to the same 64-hex key.
+   to the same 64-hex key. When the clients are GUI apps (HSYNC Desktop), the
+   natural workflow is the other way around: pick the shared password the devices
+   use, derive the key with the client's `hsync derive-group-key`, and store that
+   64-hex output as the `bucket=<key>` line — the Desktop field always treats
+   what a user types as a shared password, so a node key minted randomly can
+   only ever be matched by a raw-key CLI client (or a legacy stored value).
 2. Write one `bucket=<key>` line per bucket to
    `/etc/hsync-rendezvous/group-keys` (0640, root-owned) and pass it to the node
    with `--keys-fd 5` (the packaged systemd/launchd units) or

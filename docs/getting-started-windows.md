@@ -48,8 +48,12 @@ Restart-Service hsync-rendezvous
 
   (Mint a key per bucket with `openssl rand -hex 32`; comments and blank lines
   are ignored. The full format is in
-  [usage.md → Group keys](usage.md#group-keys---keys-fd----keys-file).) The
-  installed service already passes `--keys-file` for that file; for
+  [usage.md → Group keys](usage.md#group-keys---keys-fd----keys-file).) For
+  devices that use the GUI client's shared password instead, derive the key from
+  that password with `hsync derive-group-key` and store its 64-hex output as the
+  `bucket=<key>` line — the Desktop field always treats what a user types as a
+  shared password, so a randomly minted key can never match it. The installed
+  service already passes `--keys-file` for that file; for
   a fully private node uncomment the `HSYNC_RENDEZVOUS_PRIVATE` environment block
   in `hsync-rendezvous-service.xml` and restart (the one-switch equivalent of
   declaring `--protected-bucket` for every bucket in the keys file — see
