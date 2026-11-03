@@ -251,11 +251,11 @@ class RdvRegister(_GroupBucketFrame):
     (``0`` = not a seeder). The rendezvous relays it in ``query`` responses; the
     authoritative value is the authenticated ``serve_slots`` (ADR 0030).
 
-    ``server_ready``/``prefer_master``/``never_master``/``startup_time``/
-    ``sync_direction`` are the **election advertisement**: the same values the
-    mDNS TXT record carries, relayed verbatim in ``query`` peers so a
-    rendezvous-discovered peer ranks exactly like a LAN-discovered one. The node
-    never interprets them; they are not authenticated and not authoritative
+    ``server_ready``/``prefer_master``/``never_master``/``inbound``/
+    ``startup_time``/``sync_direction`` are the **election advertisement**: the
+    same values the mDNS TXT record carries, relayed verbatim in ``query`` peers
+    so a rendezvous-discovered peer ranks exactly like a LAN-discovered one. The
+    node never interprets them; they are not authenticated and not authoritative
     (the data plane authenticates identity by certificate pinning). A changed
     advertisement requires a new ``register`` — ``refresh`` never mutates them.
     """
@@ -269,6 +269,7 @@ class RdvRegister(_GroupBucketFrame):
     server_ready: bool = False
     prefer_master: bool = False
     never_master: bool = False
+    inbound: bool = False
     startup_time: float = Field(default=0.0, ge=0, le=STARTUP_TIME_MAX)
     sync_direction: SyncDirection = "bidirectional"
 
@@ -345,6 +346,7 @@ class RdvPeer(_StrictModel):
     server_ready: bool = False
     prefer_master: bool = False
     never_master: bool = False
+    inbound: bool = False
     startup_time: float = Field(default=0.0, ge=0, le=STARTUP_TIME_MAX)
     sync_direction: SyncDirection = "bidirectional"
 

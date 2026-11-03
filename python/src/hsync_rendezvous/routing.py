@@ -63,6 +63,7 @@ class PeerRecord:
     server_ready: bool = False
     prefer_master: bool = False
     never_master: bool = False
+    inbound: bool = False
     startup_time: float = 0.0
     sync_direction: SyncDirection = "bidirectional"
     expires_at: float = field(default_factory=lambda: time.monotonic() + DEFAULT_TTL)
@@ -104,6 +105,7 @@ class PeerRecord:
             server_ready=model.server_ready,
             prefer_master=model.prefer_master,
             never_master=model.never_master,
+            inbound=model.inbound,
             startup_time=model.startup_time,
             sync_direction=model.sync_direction,
         )

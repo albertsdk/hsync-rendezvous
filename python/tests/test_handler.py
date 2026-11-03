@@ -948,6 +948,7 @@ def test_wire_serialization_is_compact_and_spec_ordered() -> None:
         "server_ready",
         "prefer_master",
         "never_master",
+        "inbound",
         "startup_time",
         "sync_direction",
     ]

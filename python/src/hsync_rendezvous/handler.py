@@ -914,6 +914,7 @@ class RendezvousHandler:
             server_ready=record.server_ready,
             prefer_master=record.prefer_master,
             never_master=record.never_master,
+            inbound=record.inbound,
             startup_time=record.startup_time,
             sync_direction=record.sync_direction,
         )
