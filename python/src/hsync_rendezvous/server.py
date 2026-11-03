@@ -76,11 +76,12 @@ RDV_IDLE_TIMEOUT = 30.0
 # What the node *emits* is bounded separately by protocol.MAX_RESPONSE_BYTES.
 MAX_FRAME_BYTES = 8192
 # QUIC flow-control bounds: a request frame is at most MAX_FRAME_BYTES and the
-# client only pipelines a few per stream, so small receive windows bound the
-# server-side buffering per stream/connection without ever stalling a legitimate
-# exchange (responses are governed by the peer's own advertised limits).
+# client only pipelines a few per stream, so the per-stream receive window bounds
+# the server-side buffering per stream without stalling a legitimate exchange
+# (responses are governed by the peer's own advertised limits). The
+# connection-level window must cover every concurrent stream's share of that
+# window, or it — not the per-stream one — becomes the throughput ceiling.
 MAX_STREAM_DATA_BYTES = 4 * MAX_FRAME_BYTES
-MAX_DATA_BYTES = 16 * MAX_FRAME_BYTES
 
 # Per-IP handshake admission and open-connection cap (the CLI also supplies a
 # process-wide cap from ResourceLimits); RETRY only stops *amplified* (spoofed)
@@ -100,6 +101,11 @@ MAX_SESSIONS_PER_CONNECTION = 4
 # listener keeps one control stream plus one stream per relayed peer, so the
 # bound has to cover them without letting a connection pin unbounded tasks.
 MAX_RELAY_STREAMS_PER_CONNECTION = 32
+# The connection window must span every relay stream's per-stream window: a
+# relayed session multiplexes one stream per bridged TCP connection, so a
+# connection cap below the sum throttled each transfer to the shared budget and
+# capped relayed throughput well under the per-stream allowance.
+MAX_DATA_BYTES = MAX_RELAY_STREAMS_PER_CONNECTION * MAX_STREAM_DATA_BYTES
 
 # HSYNC service identities are always ECDSA P-256 (ADR-0037).
 PrivateKey = ec.EllipticCurvePrivateKey
