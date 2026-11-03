@@ -101,11 +101,13 @@
 
 Two peers that no inbound NAT mapping reaches (carrier-grade NAT, a hotspot
 behind a carrier, a guest network) can still run the `p2p/1` data plane: the node
-pairs them and forwards their bytes, which stay **opaque TLS** end to end. The
-node never terminates or inspects that TLS, so content, file names and
-credentials remain invisible to it, and the peers keep authenticating each other
-by certificate pinning. What the node necessarily observes is the pairing
-(`cid` ↔ `cid`) and the volume.
+pairs them and forwards their bytes, which stay **opaque** end to end. The node
+never terminates or inspects the payload, so content, file names and credentials
+remain invisible to it, and the peers keep authenticating each other by
+certificate pinning. Inside the paired stream the two peers multiplex their
+several loopback connections (REST + WSS) over the one session with a private
+per-stream framing layer the node never parses. What the node necessarily
+observes is the pairing (`cid` ↔ `cid`) and the volume.
 
 - **On by default**: every node accepts relay frames. Start one with `--no-relay`
   to make it discovery-only: every relay frame is then answered
