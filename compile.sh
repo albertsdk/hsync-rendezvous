@@ -427,6 +427,10 @@ _compute_shlib_depends() {
     local bin="${stage_dir}/usr/lib/${APP_NAME}/${APP_NAME}"
     command -v dpkg-shlibdeps >/dev/null 2>&1 || { echo ""; return 0; }
     [[ -f "${bin}" ]] || { echo ""; return 0; }
+    # dpkg-shlibdeps runs from a scratch dir (it needs a debian/control in the
+    # cwd), so the binary path must be absolute: a relative path would stop
+    # resolving after the cd below and silently yield no dependencies.
+    bin="$(cd "$(dirname "${bin}")" && pwd)/$(basename "${bin}")"
     local tmp deps
     tmp="$(mktemp -d)"
     mkdir -p "${tmp}/debian"
@@ -444,7 +448,12 @@ _inject_shlib_depends() {
     local deps
     deps="$(_compute_shlib_depends "${stage_dir}")"
     if [[ -z "${deps}" ]]; then
-        log_warn "dpkg-shlibdeps unavailable; libc6 dependency not added to control"
+        if ! command -v dpkg-shlibdeps >/dev/null 2>&1; then
+            log_warn "dpkg-shlibdeps not installed; libc6 dependency not added to control"
+            log_info "Install it with: apt install dpkg-dev"
+        else
+            log_warn "dpkg-shlibdeps resolved no shared-library dependencies; nothing added to control"
+        fi
         return 0
     fi
     log_step "Adding shared-library dependencies: ${deps}"
@@ -623,6 +632,8 @@ if command -v dpkg-shlibdeps >/dev/null 2>&1; then
     else
         echo 'WARNING: dpkg-shlibdeps resolved no dependencies' >&2
     fi
+else
+    echo 'WARNING: dpkg-shlibdeps not installed; libc6 dependency not added to control' >&2
 fi
 fakeroot dpkg-deb --build "${stage}" /out
 chmod 0644 "/out/${APP_NAME}_${deb_version}_${deb_arch}.deb"
