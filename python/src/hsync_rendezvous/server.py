@@ -24,7 +24,7 @@ import ssl
 import stat
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -816,6 +816,56 @@ def _protocol_factory(
     return _create
 
 
+async def _serve_quic_port(
+    port: int,
+    *,
+    host: str,
+    config: QuicConfiguration,
+    retry: bool,
+    factory: Callable[[Any, Any], Any],
+) -> tuple[Any, int]:
+    """Bind one QUIC/UDP listener; returns ``(server, real_bound_port)``."""
+    server = await serve(
+        host,
+        port,
+        configuration=config,
+        retry=retry,
+        create_protocol=factory,
+    )
+    transport = server._transport
+    sockname = transport.get_extra_info("sockname") if transport is not None else None
+    return server, int(sockname[1]) if sockname is not None else int(port)
+
+
+async def _bind_each_port(
+    ports: Sequence[int],
+    bind_one: Callable[[int], Awaitable[tuple[Any, int]]],
+) -> tuple[list[Any], list[int], list[tuple[int, BaseException]], BaseException | None]:
+    """Bind *ports* one at a time, best-effort (shared by both transports).
+
+    A port that refuses to bind is skipped and reported in ``failures`` so the
+    node still starts on the free ports; ``first_error`` is remembered so the
+    caller can fail when **no** port bound. Each ``bind_one`` returns the bound
+    server plus its real port (an ``0`` port resolves to the kernel-assigned
+    one), keeping the per-transport bind detail next to its transport.
+    """
+    servers: list[Any] = []
+    bound_ports: list[int] = []
+    failures: list[tuple[int, BaseException]] = []
+    first_error: BaseException | None = None
+    for port in ports:
+        try:
+            server, bound_port = await bind_one(port)
+        except OSError as exc:
+            failures.append((port, exc))
+            if first_error is None:
+                first_error = exc
+            continue
+        servers.append(server)
+        bound_ports.append(bound_port)
+    return servers, bound_ports, failures, first_error
+
+
 async def start_servers(
     host: str,
     ports: Sequence[int],
@@ -842,28 +892,10 @@ async def start_servers(
     config = build_quic_configuration(identity, idle_timeout=idle_timeout)
     factory = _protocol_factory(handler, connection_guard)
 
-    servers: list[Any] = []
-    bound_ports: list[int] = []
-    failures: list[tuple[int, BaseException]] = []
-    first_error: BaseException | None = None
-    for port in ports:
-        try:
-            server = await serve(
-                host,
-                port,
-                configuration=config,
-                retry=retry,
-                create_protocol=factory,
-            )
-        except OSError as exc:
-            failures.append((port, exc))
-            if first_error is None:
-                first_error = exc
-            continue
-        transport = server._transport
-        sockname = transport.get_extra_info("sockname") if transport is not None else None
-        bound_ports.append(int(sockname[1]) if sockname is not None else int(port))
-        servers.append(server)
+    servers, bound_ports, failures, first_error = await _bind_each_port(
+        ports,
+        lambda port: _serve_quic_port(port, host=host, config=config, retry=retry, factory=factory),
+    )
     if not servers and first_error is not None:
         raise first_error
     return servers, bound_ports, identity, failures
@@ -1213,6 +1245,23 @@ def _bind_tcp_socket(host: str, port: int) -> socket.socket:
     raise OSError(f"could not resolve {host}:{port}")
 
 
+async def _serve_tcp_port(
+    port: int,
+    *,
+    host: str,
+    loop: asyncio.AbstractEventLoop,
+    factory: Callable[[], RendezvousTcpProtocol],
+) -> tuple[asyncio.Server, int]:
+    """Bind one TLS/TCP listener; returns ``(server, real_bound_port)``."""
+    sock = _bind_tcp_socket(host, port)
+    try:
+        server = await loop.create_server(factory, sock=sock)
+    except OSError:
+        sock.close()
+        raise
+    return server, int(sock.getsockname()[1])
+
+
 async def start_tcp_servers(
     host: str,
     ports: Sequence[int],
@@ -1236,28 +1285,10 @@ async def start_tcp_servers(
     factory = _tcp_protocol_factory(handler, context, connection_guard)
     loop = asyncio.get_running_loop()
 
-    servers: list[asyncio.Server] = []
-    bound_ports: list[int] = []
-    failures: list[tuple[int, BaseException]] = []
-    first_error: BaseException | None = None
-    for port in ports:
-        try:
-            sock = _bind_tcp_socket(host, port)
-        except OSError as exc:
-            failures.append((port, exc))
-            if first_error is None:
-                first_error = exc
-            continue
-        try:
-            server = await loop.create_server(factory, sock=sock)
-        except OSError as exc:
-            sock.close()
-            failures.append((port, exc))
-            if first_error is None:
-                first_error = exc
-            continue
-        bound_ports.append(int(sock.getsockname()[1]))
-        servers.append(server)
+    servers, bound_ports, failures, first_error = await _bind_each_port(
+        ports,
+        lambda port: _serve_tcp_port(port, host=host, loop=loop, factory=factory),
+    )
     if not servers and first_error is not None:
         raise first_error
     return servers, bound_ports, identity, failures

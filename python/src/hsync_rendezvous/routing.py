@@ -377,6 +377,13 @@ class RoutingTable:
             j = self._randbelow(i + 1)
             items[i], items[j] = items[j], items[i]
 
+    def _active_records(
+        self, keys: list[tuple[str, str, str | None]], now: float
+    ) -> list[PeerRecord]:
+        """Active (unexpired) records for *keys*, one ``records[key]`` lookup per key."""
+        records = self._records
+        return [record for key in keys if now < (record := records[key]).expires_at]
+
     def sample(
         self,
         bucket: str,
@@ -395,7 +402,7 @@ class RoutingTable:
         if k == n:
             # Single ``records[key]`` lookup per key (walrus) instead of a
             # second lookup in the comprehension.
-            all_records = [record for key in keys if now < (record := records[key]).expires_at]
+            all_records = self._active_records(keys, now)
             self._shuffle(all_records)
             return all_records
         # n > k: rejection-sample up to a bounded number of distinct draws; if
@@ -414,7 +421,7 @@ class RoutingTable:
             if now < record.expires_at:
                 result.append(record)
         if len(result) < k:
-            remaining = [record for key in keys if now < (record := records[key]).expires_at]
+            remaining = self._active_records(keys, now)
             self._shuffle(remaining)
             return remaining[:k]
         return result

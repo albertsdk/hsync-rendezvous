@@ -283,7 +283,7 @@ def run(
         "--keys-fd",
         min=0,
         envvar=_DEFAULT_KEYS_FD_ENV,
-        help="FD with group keys (one 'bucket=<hex-key>' per line). Env: HSYNC_RENDEZVOUS_KEYS_FD.",
+        help="FD with group keys (one 'bucket=<hex-key>' per line).",
     ),
     keys_file: str | None = typer.Option(
         None,
@@ -292,14 +292,14 @@ def run(
         help=(
             "File with group keys (one 'bucket=<hex-key>' per line), read once "
             "at startup. Alternative to --keys-fd for service managers that "
-            "cannot pass a descriptor (Windows). Env: HSYNC_RENDEZVOUS_KEYS_FILE."
+            "cannot pass a descriptor (Windows)."
         ),
     ),
     private: bool = typer.Option(
         False,
         "--private",
         envvar=_DEFAULT_PRIVATE_ENV,
-        help="Require a valid bucket_token on every frame (private node). Env: HSYNC_RENDEZVOUS_PRIVATE=1.",
+        help="Require a valid bucket_token on every frame (private node).",
     ),
     upnp: bool = typer.Option(
         False,
@@ -315,7 +315,7 @@ def run(
             "with --no-relay). Two peers that no inbound NAT mapping reaches "
             "(mobile CGNAT, a hotspot behind a carrier) then still run the p2p "
             "data plane; the node never sees content and never terminates the "
-            "peers' TLS. Env: HSYNC_RENDEZVOUS_RELAY=0."
+            "peers' TLS."
         ),
     ),
     relay_idle_timeout: int = typer.Option(
@@ -328,7 +328,6 @@ def run(
         help=(
             "Drop a relayed session (and a listener control stream) after this "
             "many seconds without traffic in either direction (default 120). "
-            "Env: HSYNC_RENDEZVOUS_RELAY_IDLE_TIMEOUT."
         ),
     ),
     relay_session_bytes: int = typer.Option(
@@ -340,7 +339,6 @@ def run(
         help=(
             "Close a relayed session after this many forwarded bytes (0 = no "
             "per-session cap; the byte rate remains the primary bound). "
-            "Env: HSYNC_RENDEZVOUS_RELAY_SESSION_BYTES."
         ),
     ),
     relay_bandwidth: int = typer.Option(
@@ -352,7 +350,6 @@ def run(
         help=(
             "Aggregate relay throughput cap in KiB/s (default 8192 = 8 MiB/s; "
             "0 = unlimited). Excess traffic is throttled, never dropped. "
-            "Env: HSYNC_RENDEZVOUS_RELAY_BANDWIDTH."
         ),
     ),
     ttl: int = typer.Option(
@@ -384,7 +381,7 @@ def run(
         envvar=_DEFAULT_METRICS_HOST_ENV,
         help=(
             "Loopback address for the /metrics endpoint (only 127.0.0.1, ::1 or "
-            "localhost; plain HTTP, never exposed). Env: HSYNC_RENDEZVOUS_METRICS_HOST."
+            "localhost; plain HTTP, never exposed)."
         ),
     ),
     metrics_port: int | None = typer.Option(
@@ -394,8 +391,7 @@ def run(
         metavar="PORT",
         help=(
             "Serve aggregate Prometheus metrics on --metrics-host:PORT (loopback "
-            "TCP, Bearer token required). Off when omitted. Env: "
-            "HSYNC_RENDEZVOUS_METRICS_PORT."
+            "TCP, Bearer token required). Off when omitted."
         ),
     ),
     metrics_token_fd: int | None = typer.Option(
@@ -403,18 +399,14 @@ def run(
         "--metrics-token-fd",
         envvar=_DEFAULT_METRICS_TOKEN_FD_ENV,
         help=(
-            "File descriptor holding the metrics bearer token (one line, at least "
-            "32 characters). Env: HSYNC_RENDEZVOUS_METRICS_TOKEN_FD."
+            "File descriptor holding the metrics bearer token (one line, at least 32 characters)."
         ),
     ),
     metrics_token_file: str | None = typer.Option(
         None,
         "--metrics-token-file",
         envvar=_DEFAULT_METRICS_TOKEN_FILE_ENV,
-        help=(
-            "File holding the metrics bearer token; portable alternative to "
-            "--metrics-token-fd. Env: HSYNC_RENDEZVOUS_METRICS_TOKEN_FILE."
-        ),
+        help=("File holding the metrics bearer token; portable alternative to --metrics-token-fd."),
     ),
     stats_file: str | None = typer.Option(
         None,
@@ -422,8 +414,7 @@ def run(
         envvar=_DEFAULT_STATS_FILE_ENV,
         help=(
             "Write the aggregate counters to this file in Prometheus text format "
-            "(atomic replace; node_exporter textfile collector). Env: "
-            "HSYNC_RENDEZVOUS_STATS_FILE."
+            "(atomic replace; node_exporter textfile collector)."
         ),
     ),
     stats_interval: int = typer.Option(
@@ -456,7 +447,7 @@ def run(
         help=(
             "Keep the TLS identity in memory and write no identity file "
             "(read-only filesystems, throwaway nodes); the fingerprint changes on "
-            "every restart, so clients cannot pin it. Env: HSYNC_RENDEZVOUS_EPHEMERAL=1."
+            "every restart, so clients cannot pin it."
         ),
     ),
     public_host: list[str] = typer.Option(
@@ -471,18 +462,14 @@ def run(
         True,
         "--udp/--no-udp",
         envvar=_DEFAULT_UDP_ENV,
-        help=(
-            "Serve the QUIC/UDP listener (on by default; disable with --no-udp). "
-            "Env: HSYNC_RENDEZVOUS_UDP=0."
-        ),
+        help=("Serve the QUIC/UDP listener (on by default; disable with --no-udp)."),
     ),
     tcp: bool = typer.Option(
         True,
         "--tcp/--no-tcp",
         envvar=_DEFAULT_TCP_ENV,
         help=(
-            "Serve the TLS/TCP listener on the same ports (on by default; disable "
-            "with --no-tcp). Env: HSYNC_RENDEZVOUS_TCP=0."
+            "Serve the TLS/TCP listener on the same ports (on by default; disable with --no-tcp)."
         ),
     ),
 ) -> None:
@@ -754,6 +741,77 @@ def _warn_bind_failures(failures: list[tuple[int, BaseException]], *, proto: str
         )
 
 
+async def _bind_transport(
+    *,
+    proto: str,
+    host: str,
+    ports: Sequence[int],
+    handler: RendezvousHandler,
+    identity: NodeIdentity | None,
+    connection_guard: ConnectionGuard | None,
+    what: str,
+    bind_advice: str,
+) -> tuple[list[Any], list[int], NodeIdentity | None, BindError | None]:
+    """Bind one transport's listeners, best-effort (shared UDP/TCP startup shape).
+
+    Returns the newly-bound servers, their real bound ports, the TLS identity the
+    transport resolved and a :class:`BindError` only when the transport as a
+    whole failed to bind; per-port failures are warned about (never fatal). The
+    caller extends its own server/port lists and keeps the first failure for the
+    exit path.
+    """
+    try:
+        if proto == "udp":
+            new_servers, new_ports, resolved_identity, failures = await start_servers(
+                host,
+                ports,
+                handler,
+                retry=True,
+                identity=identity,
+                connection_guard=connection_guard,
+            )
+        else:
+            new_servers, new_ports, resolved_identity, failures = await start_tcp_servers(
+                host,
+                ports,
+                handler,
+                identity=identity,
+                connection_guard=connection_guard,
+            )
+    except OSError as exc:
+        return (
+            [],
+            [],
+            identity,
+            _bind_error(host, ports[0], exc, what=what, bind_advice=bind_advice),
+        )
+    # Best-effort: a requested port that could not bind (address in use, e.g. 53
+    # held by the local resolver) is skipped with an always-on, peer-free warning
+    # instead of failing the whole node.
+    _warn_bind_failures(failures, proto=proto)
+    return new_servers, new_ports, resolved_identity, None
+
+
+def _bind_error(
+    host: str,
+    port: int,
+    exc: BaseException,
+    *,
+    what: str,
+    bind_advice: str,
+) -> BindError:
+    """Build the exit-path :class:`BindError` for one failed transport bind."""
+    return BindError(
+        host,
+        port,
+        _errno_from(exc),
+        what=what,
+        port_flag="--listen-port <PORT>",
+        port_example="--listen-port 8443",
+        bind_advice=bind_advice,
+    )
+
+
 def _bind_error_message(exc: BindError) -> str:
     """Actionable stderr message for a failed endpoint bind (exit code 3)."""
     target = f"{exc.host}:{exc.port}"
@@ -845,62 +903,42 @@ async def _async_main(
     resolved_identity = identity
     bind_errors: list[BindError] = []
     if udp:
-        try:
-            udp_servers, udp_ports, resolved_identity, failures = await start_servers(
-                host,
-                ports,
-                handler,
-                retry=True,
-                identity=resolved_identity,
-                connection_guard=connection_guard,
-            )
-        except OSError as exc:
-            bind_errors.append(
-                BindError(
-                    host,
-                    ports[0],
-                    _errno_from(exc),
-                    what="the QUIC/UDP listener",
-                    port_flag="--listen-port <PORT>",
-                    port_example="--listen-port 8443",
-                    bind_advice="Check --listen-host/--listen-port; ports below 1024 need "
-                    "root or CAP_NET_BIND_SERVICE.",
-                )
-            )
-        else:
-            # Best-effort: a requested port that could not bind (address in use,
-            # e.g. 53 held by the local resolver) is skipped with an always-on,
-            # peer-free warning instead of failing the whole node.
-            _warn_bind_failures(failures, proto="udp")
-            servers.extend(udp_servers)
-            bound_ports.extend(udp_ports)
+        new_servers, new_ports, resolved_identity, failure = await _bind_transport(
+            proto="udp",
+            host=host,
+            ports=ports,
+            handler=handler,
+            identity=resolved_identity,
+            connection_guard=connection_guard,
+            what="the QUIC/UDP listener",
+            bind_advice=(
+                "Check --listen-host/--listen-port; ports below 1024 need "
+                "root or CAP_NET_BIND_SERVICE."
+            ),
+        )
+        if failure is not None:
+            bind_errors.append(failure)
+        servers.extend(new_servers)
+        bound_ports.extend(new_ports)
     if tcp:
-        try:
-            tcp_servers, tcp_ports, resolved_identity, failures = await start_tcp_servers(
-                host,
-                ports,
-                handler,
-                identity=resolved_identity,
-                connection_guard=connection_guard,
-            )
-        except OSError as exc:
-            bind_errors.append(
-                BindError(
-                    host,
-                    ports[0],
-                    _errno_from(exc),
-                    what="the TLS/TCP listener",
-                    port_flag="--listen-port <PORT>",
-                    port_example="--listen-port 8443",
-                    bind_advice="Check --listen-host/--listen-port; ports below 1024 need "
-                    "root or CAP_NET_BIND_SERVICE. TCP 443 may already be held by a "
-                    "co-hosted HTTPS server — run the node QUIC-only with --no-tcp.",
-                )
-            )
-        else:
-            _warn_bind_failures(failures, proto="tcp")
-            servers.extend(tcp_servers)
-            bound_ports.extend(tcp_ports)
+        new_servers, new_ports, resolved_identity, failure = await _bind_transport(
+            proto="tcp",
+            host=host,
+            ports=ports,
+            handler=handler,
+            identity=resolved_identity,
+            connection_guard=connection_guard,
+            what="the TLS/TCP listener",
+            bind_advice=(
+                "Check --listen-host/--listen-port; ports below 1024 need "
+                "root or CAP_NET_BIND_SERVICE. TCP 443 may already be held by a "
+                "co-hosted HTTPS server — run the node QUIC-only with --no-tcp."
+            ),
+        )
+        if failure is not None:
+            bind_errors.append(failure)
+        servers.extend(new_servers)
+        bound_ports.extend(new_ports)
     if not servers:
         # Nothing bound on any enabled transport: fail exactly as the
         # single-transport node did (exit 3), naming the transport that failed.
