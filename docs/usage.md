@@ -20,9 +20,11 @@ hsync-rendezvous --version
 
 | Option | Default | Description |
 |---|---|---|
-| `--listen-host` | `0.0.0.0` | Address to bind the QUIC/UDP listener to. Accepts an optional port (`HOST[:PORT]`, e.g. `0.0.0.0:443` or `[::1]:443`). |
-| `--listen-port` | `443` | UDP port (1–65535). 443 is the QUIC/HTTP3 default; ports below 1024 need root or `CAP_NET_BIND_SERVICE` (the systemd unit grants it). Mutually exclusive with a port in `--listen-host HOST:PORT`. |
-| `--listen-ports` | *(none)* | Comma-separated UDP ports to listen on in **one process** (multi-port). The listeners share one in-memory routing table, so a peer registered via one port is visible to a query on another. The point is to offer several inbound doors because a **client's egress firewall** may block UDP 443 while allowing another UDP port. Recommended reachability set: `443,53` (`RDV_PORT_SET`); 53 is the most permissive UDP port but is usually held by the local resolver — free it or omit it. Binding is **best-effort**: a port that cannot bind is skipped with a warning and the node keeps serving the rest (it fails only if none bind). Mutually exclusive with `--listen-port` and a port in `--listen-host HOST:PORT`. |
+| `--listen-host` | `0.0.0.0` | Address to bind the listeners to. Accepts an optional port (`HOST[:PORT]`, e.g. `0.0.0.0:443` or `[::1]:443`). Applies to both transports (QUIC/UDP and TLS/TCP). |
+| `--listen-port` | `443` | Port (1–65535) for both the QUIC/UDP and TLS/TCP listeners. 443 is the QUIC/HTTP3 and HTTPS default; ports below 1024 need root or `CAP_NET_BIND_SERVICE` (the systemd unit grants it). Mutually exclusive with a port in `--listen-host HOST:PORT`. |
+| `--listen-ports` | *(none)* | Comma-separated ports to listen on in **one process** (multi-port), on both transports. The listeners share one in-memory routing table, so a peer registered via one port is visible to a query on another. The point is to offer several inbound doors because a **client's egress firewall** may block UDP 443 while allowing another port. Recommended reachability set: `443,53` (`RDV_PORT_SET`); 53 is the most permissive UDP port but is usually held by the local resolver — free it or omit it. Binding is **best-effort and per (port, transport)**: a port that cannot bind on a transport is skipped with a warning and the node keeps serving the rest (it fails only if **no** transport binds any port). Mutually exclusive with `--listen-port` and a port in `--listen-host HOST:PORT`. |
+| `--udp` / `--no-udp` | *(enabled)* | Serve the **QUIC/UDP** listener (on by default; `--no-udp` disables it). Environment variable form: `HSYNC_RENDEZVOUS_UDP=0` disables, `=1` forces. |
+| `--tcp` / `--no-tcp` | *(enabled)* | Serve the **TLS/TCP** listener on the same ports (on by default; `--no-tcp` disables it). The two transports are interchangeable for discovery and relay; a client picks one with `--rendezvous-transport`. TCP 443 may already be held by a co-hosted HTTPS server — run the node QUIC-only with `--no-tcp` in that case. Environment variable form: `HSYNC_RENDEZVOUS_TCP=0` disables, `=1` forces. Disabling both `--no-udp` and `--no-tcp` is a configuration error (exit code 2). |
 | `--identity` | XDG state path | Path of the persistent TLS identity (key+cert). Created on first run and reused afterwards, so the certificate fingerprint is stable across restarts and can be pinned by clients. Default: `$HSYNC_RENDEZVOUS_IDENTITY`, else `$HSYNC_STATE_DIR/rendezvous/identity.pem`, else `$XDG_STATE_HOME/hsync/rendezvous/identity.pem` (`~/.local/state/…`). |
 | `--ephemeral` | *(disabled flag)* | Keep the TLS identity in memory and write no identity file (read-only filesystems, throwaway nodes); the fingerprint changes on every restart, so clients cannot pin it. Mutually exclusive with `--identity`. Environment variable form: `HSYNC_RENDEZVOUS_EPHEMERAL=1`. |
 | `--public-host` | *(none)* | Public hostname or IP to add to the certificate SAN (repeatable). |
@@ -30,7 +32,7 @@ hsync-rendezvous --version
 | `--keys-fd` | *(none)* | File descriptor carrying the group keys (see below). Environment variable form: `HSYNC_RENDEZVOUS_KEYS_FD`. |
 | `--keys-file` | *(none)* | File carrying the group keys (same `bucket=<hex-key>` format); read once at startup and never written. Portable alternative to `--keys-fd` for service managers that cannot pass a descriptor (Windows/WinSW); the two are mutually exclusive. A missing/non-regular file or a symlink is a configuration error (exit code 2); on POSIX a group-writable or world-accessible file is reported on the always-on warning channel (0640 group-read is accepted). Environment variable form: `HSYNC_RENDEZVOUS_KEYS_FILE`. |
 | `--private` | *(disabled flag)* | Private node: every frame must carry a valid `bucket_token`, for **every** bucket (not only `--protected-bucket`). Starting it with no group key fails fast (exit code 2). Environment variable form: `HSYNC_RENDEZVOUS_PRIVATE=1`. |
-| `--upnp` | *(disabled flag)* | Map the QUIC/UDP listener port(s) with UPnP (opt-in; off by default). With `--listen-ports`, every bound port is mapped, so each offered door is also reachable from the WAN side. |
+| `--upnp` | *(disabled flag)* | Map the listener port(s) with UPnP for **both** transports (UDP for QUIC and TCP for TLS/TCP; opt-in, off by default). With `--listen-ports`, every bound port is mapped on both protocols, so each offered door is also reachable from the WAN side. |
 | `--relay` / `--no-relay` | *(enabled)* | Relay the peers' opaque bytes (`rdv/1` relay frames), so two peers that no inbound NAT mapping reaches can still run their data plane through this node. **On by default**; `--no-relay` disables it. Without the relay the node answers every relay frame with `relay_unavailable` and only directly reachable peers connect. Relaying spends the node's uplink, which is why the aggregate rate and the other bounds below stay in force. The node never terminates or inspects the relayed payload. Environment variable form: `HSYNC_RENDEZVOUS_RELAY=0` disables, `=1` forces. |
 | `--relay-idle-timeout` | `120` | Seconds without traffic in either direction before a relayed session (or a listener control stream) is closed. Range `30..3600`. |
 | `--relay-session-bytes` | `0` | Close a relayed session after this many forwarded bytes (`0` = no per-session cap; the byte rate stays the primary bound). |
@@ -44,7 +46,7 @@ hsync-rendezvous --version
 | `--metrics-token-file` | *(none)* | File carrying the metrics bearer token; portable alternative to `--metrics-token-fd` (the two are mutually exclusive). Environment variable form: `HSYNC_RENDEZVOUS_METRICS_TOKEN_FILE`. |
 | `--stats-file` | *(none)* | Write the aggregate counters to this path in Prometheus text format, replacing it atomically every `--stats-interval` seconds (node_exporter textfile collector). Environment variable form: `HSYNC_RENDEZVOUS_STATS_FILE`. |
 | `--stats-interval` | `15` | Seconds between two publications (`STATUS=` on the service manager and the `--stats-file`). 1–3600. Environment variable form: `HSYNC_RENDEZVOUS_STATS_INTERVAL`. |
-| `--no-rate-limit` | *(disabled flag)* | Disable rate limiting entirely (benchmark/test seam). **CLI-only**: there is deliberately no environment-variable form, so a stale `.env` or unit setting cannot silently unthrottle a node. Never enable in production — it removes the anti-abuse limits the spec requires. The transport guard is not created in this mode, so the `hsync_rendezvous_quic_connections_*` gauges stay at 0 (the peer gauges are unaffected). |
+| `--no-rate-limit` | *(disabled flag)* | Disable rate limiting entirely (benchmark/test seam). **CLI-only**: there is deliberately no environment-variable form, so a stale `.env` or unit setting cannot silently unthrottle a node. Never enable in production — it removes the anti-abuse limits the spec requires. The transport guard is not created in this mode, so the `hsync_rendezvous_connections_*` gauges stay at 0 (the peer gauges are unaffected). |
 
 ### `identity show`
 
@@ -355,22 +357,30 @@ can rely on.
 
 ### Transport security
 
-- QUIC/UDP (default port 443) carrying **TLS 1.3**: the exchanged peer list is not
-  readable by an ISP or a passive observer on the path.
+- Two interchangeable transports, both carrying **TLS 1.3**: **QUIC/UDP** and
+  **TLS/TCP** on the same ports (default 443), with the same ALPN
+  (`hsync-rdv/1`), the same node identity and the same `rdv/1` frames. Discovery
+  (`register`/`refresh`/`leave`/`query`) and the relay behave identically on
+  both. The exchanged peer list is not readable by an ISP or a passive observer
+  on the path, whichever transport a client picks.
 - The node presents a **self-signed** certificate and clients authenticate it by
   SHA-256 fingerprint: on a terminal the first contact is confirmed at a prompt
   (the default `ask` policy, like `ssh`), while an unattended client pins the
   fingerprint or trusts the first sighting — the exact steps are in "TLS identity
-  & pinning".
+  & pinning". The fingerprint is the same on both transports (one identity), so
+  a pin is shared.
 - QUIC `RETRY` + address validation before any connection state is allocated
-  (anti-amplification) and a node-side **transport guard**: about 30 new QUIC
+  (anti-amplification) and a node-side **transport guard**: about 30 new
   connections/handshakes per second (burst 100) per source address, plus a per-IP
   and a process-wide cap on simultaneously-open connections, all enforced before
-  any handshake work runs and sized from the host's RAM and CPU. QUIC receive
-  windows are bounded too, so a connection cannot buffer unbounded input. A
-  connection or handshake flood is throttled without external help (works with a
-  bare listener, no firewall/nginx needed for per-source floods; a distributed
-  volumetric attack still needs upstream mitigation).
+  any handshake work runs and sized from the host's RAM and CPU. On TLS/TCP the
+  admission runs before the TLS handshake **and before any byte is read**, so a
+  handshake flood from one IP is refused with no handshake work at all. QUIC
+  receive windows and the TLS/TCP stream reader are bounded too, so a connection
+  cannot buffer unbounded input. A connection or handshake flood is throttled
+  without external help (works with a bare listener, no firewall/nginx needed for
+  per-source floods; a distributed volumetric attack still needs upstream
+  mitigation).
 - **Layered in-memory rate limits**, every window keyed by source address so one
   peer cannot exhaust another's budget: the valid-frame admission (~10 req/s,
   burst 50), per-`(IP, bucket)` windows for `register`/`refresh` (10/min) and
@@ -501,7 +511,7 @@ there too (`/etc/systemd/journald.conf`: `SystemMaxUse=`, `MaxRetentionSec=`,
 then `journalctl -u hsync-rendezvous`; rotate the launchd file with `newsyslog`).
 
 The `--ready-file`/`HSYNC_RENDEZVOUS_READY_FILE` seam writes the process PID to
-the given path once the QUIC listener is bound (and removes it on graceful
+the given path once at least one listener is bound (and removes it on graceful
 shutdown). It carries no peer data and exists so tests and orchestrators can
 await readiness deterministically. A path the node cannot write (missing
 directory, no permission, or an existing file — even a stale one) fails fast
@@ -516,7 +526,7 @@ The process contract is small: the node is meant to be owned by a supervisor.
 
 | Signal | Effect |
 |---|---|
-| `SIGINT`, `SIGTERM` | Graceful stop: the QUIC transports close, the readiness file is removed, the process exits 0. |
+| `SIGINT`, `SIGTERM` | Graceful stop: the listeners close, the readiness file is removed, the process exits 0. |
 | `SIGHUP` | Ignored: a hangup (a terminal closed, an SSH session dropped, a PTY torn down) is not a stop request, so an unattended node keeps serving. |
 
 There is no reload path: the TLS identity and the group keys are read at
@@ -566,16 +576,16 @@ Two populations are reported, and they are **not** the same number.
 | `hsync_rendezvous_peers_peak_timestamp_seconds` | gauge | When that peak was reached |
 | `hsync_rendezvous_peers_updates_total` | counter | Accepted `register`/`refresh` writes |
 | `hsync_rendezvous_peers_expired_total` | counter | Records dropped by the TTL sweep |
-| `hsync_rendezvous_quic_connections_current` | gauge | QUIC connections open right now |
-| `hsync_rendezvous_quic_connections_peak` | gauge | Highest open-connection level since start |
-| `hsync_rendezvous_quic_connections_peak_timestamp_seconds` | gauge | When that peak was reached |
-| `hsync_rendezvous_quic_connections_total` | counter | Connections admitted since start |
+| `hsync_rendezvous_connections_current{transport}` | gauge | Open connections by transport (`quic`, `tcp`) |
+| `hsync_rendezvous_connections_peak{transport}` | gauge | Highest open-connection level per transport since start |
+| `hsync_rendezvous_connections_peak_timestamp_seconds{transport}` | gauge | When that per-transport peak was reached |
+| `hsync_rendezvous_connections_total{transport}` | counter | Connections admitted per transport since start |
 | `hsync_rendezvous_metrics_requests_total{outcome}` | counter | Requests answered by `/metrics` (`ok`, `unauthorized`, `not_found`, `method_not_allowed`, `rate_limited`, `unavailable`) |
 | `hsync_rendezvous_stats_write_errors_total` | counter | Failed stats-file writes |
 | `hsync_rendezvous_build_info{version,protocol}` | gauge | Always `1`; identifies the running build |
 | `hsync_rendezvous_start_time_seconds` | gauge | Unix time the process started |
 
-`peers` is the count of clients online. `quic_connections` measures handshake
+`peers` is the count of clients online. `connections{transport}` measures handshake
 concurrency instead, because a client opens **one connection per exchange**
 (`register`/`refresh`/`query`) and lets it idle out after 30 s: reporting the
 connections as "clients connected" would be wrong by an order of magnitude.
@@ -622,9 +632,9 @@ Edit the executable paths inside each unit to the location of your venv.
 | `configuration error: --keys-fd and --keys-file are mutually exclusive` | Pass one key source only. |
 | `configuration error: duplicate group key for bucket …` | The keys source lists the same bucket twice: keep exactly one line per bucket. |
 | `warn: group keys file permissions are too open` | The `--keys-file` file is group-writable or world-accessible: restrict it to `0600`/`0640` (the node keeps serving). |
-| `error: cannot bind the QUIC/UDP listener … — permission denied` | You bound a privileged port (< 1024, e.g. the 443 default) without root: use `--listen-port 8443` (any port ≥ 1024), run as root, or grant the capability (`sudo setcap cap_net_bind_service=+ep <hsync-rendezvous>`). The systemd unit already grants it. |
-| `error: cannot bind the QUIC/UDP listener … — address already in use` | Another process (or another node instance) is using that UDP port: stop it, or pick a free port with `--listen-port`. |
-| `error: cannot bind the QUIC/UDP listener … — the address is not available` | `--listen-host` is not a local interface address: use a local IP, or `0.0.0.0` to listen on all of them. |
+| `error: cannot bind the QUIC/UDP listener … — permission denied` (or `the TLS/TCP listener …`) | You bound a privileged port (< 1024, e.g. the 443 default) without root: use `--listen-port 8443` (any port ≥ 1024), run as root, or grant the capability (`sudo setcap cap_net_bind_service=+ep <hsync-rendezvous>`). The systemd unit already grants it. This exit (code 3) happens only when **no** transport binds any port. |
+| `error: cannot bind the QUIC/UDP listener … — address already in use` (or `the TLS/TCP listener …`) | Another process (or another node instance) is using that port on **every** enabled transport: stop it, pick a free port with `--listen-port`, or disable the conflicting transport (`--no-tcp` if a co-hosted HTTPS server holds TCP 443). A conflict on **one** transport only is skipped best-effort (the node keeps serving the other). |
+| `error: cannot bind the QUIC/UDP listener … — the address is not available` (or `the TLS/TCP listener …`) | `--listen-host` is not a local interface address: use a local IP, or `0.0.0.0` to listen on all of them. |
 | Client gets `token_required` | The bucket is gated (declared `--protected-bucket`, or every bucket on a private node) and the client's derived token is missing/wrong — check the group key on the client side. |
 | Client gets `rate_limited` | A per-source limit was exceeded (per-IP ~10 req/s admission, 5/min failed tokens, 5/min queries per (IP, bucket), 20/min aggregate queries per IP, 10/min registers per (IP, bucket)); wait for `retry_after` seconds — this counts against the source. |
 | Client gets `overloaded` | The node is at its host-derived routing-table ceiling (capacity backpressure, not a client abuse signal); retry after `retry_after` seconds, or prefer another rendezvous. It is not counted against the source. |

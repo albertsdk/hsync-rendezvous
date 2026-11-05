@@ -110,6 +110,32 @@ def free_tcp_port(family: int = socket.AF_INET) -> int:
         sock.close()
 
 
+def free_duplex_port(family: int = socket.AF_INET) -> int:
+    """A loopback port free on **both** UDP and TCP.
+
+    The node serves the two transports on one port number by default, so a
+    UDP-only free port could collide with a co-hosted TCP listener and silently
+    degrade the node to QUIC-only. Binding both sockets before releasing the
+    number makes the default-port choice safe for a dual-transport node.
+    """
+    host = "::1" if family == socket.AF_INET6 else "127.0.0.1"
+    for _ in range(50):
+        udp = socket.socket(family, socket.SOCK_DGRAM)
+        tcp = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            udp.bind((host, 0))
+            port = int(udp.getsockname()[1])
+            try:
+                tcp.bind((host, port))
+            except OSError:
+                continue
+            return port
+        finally:
+            udp.close()
+            tcp.close()
+    raise RuntimeError("no UDP+TCP-free loopback port available")
+
+
 def client_config() -> QuicConfiguration:
     """QUIC client configuration for ``rdv/1``.
 
@@ -312,7 +338,7 @@ def start_rendezvous(
         port = resolved_ports[0]
         port_args = ["--listen-ports", ",".join(str(p) for p in resolved_ports)]
     else:
-        port = port or free_udp_port(family)
+        port = port or free_duplex_port(family)
         resolved_ports = [port]
         port_args = ["--listen-port", str(port)]
     ready_file = workdir / "ready.pid" if ready else None
@@ -554,3 +580,107 @@ class RdvClient:
             return RawResult(RawOutcome.REPLY, raw)
         finally:
             writer.close()
+
+
+# ---------------------------------------------------------------------------
+# TLS/TCP client (language-neutral: talks only rdv/1 over the wire)
+# ---------------------------------------------------------------------------
+
+
+class RdvTcpClient:
+    """One TLS/TCP connection per session speaking ``rdv/1`` NDJSON frames.
+
+    One TCP connection carries one session: the node keeps reading until the
+    client's EOF, so the helpers here close their connection after use. The relay
+    tests need a connection that stays open as an opaque byte pipe — they call
+    :meth:`open_connection` and own it. ``alpn`` is overridable so a test can
+    prove a client offering no/different ALPN is refused.
+    """
+
+    def __init__(self, port: int, host: str = "127.0.0.1", *, alpn: str | None = RDV_ALPN) -> None:
+        self._port = port
+        self._host = host
+        self._alpn = alpn
+
+    def _context(self) -> ssl.SSLContext:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        if self._alpn is not None:
+            context.set_alpn_protocols([self._alpn])
+        return context
+
+    async def open_connection(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        """Dial one TLS/TCP connection (the caller owns and closes it)."""
+        return await asyncio.open_connection(
+            self._host, self._port, ssl=self._context(), server_hostname=self._host
+        )
+
+    @staticmethod
+    async def _close(writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+
+    @staticmethod
+    async def _write(writer: asyncio.StreamWriter, payload: bytes) -> bool:
+        """Best-effort write; ``False`` when the peer already reset the connection."""
+        try:
+            writer.write(payload)
+            await writer.drain()
+            return True
+        except (ConnectionError, OSError):
+            return False
+
+    @staticmethod
+    async def _readline(reader: asyncio.StreamReader, timeout: float) -> bytes | None:
+        """One line, or ``None`` on EOF/reset/timeout."""
+        try:
+            return await asyncio.wait_for(reader.readline(), timeout=timeout)
+        except (TimeoutError, ConnectionError, OSError):
+            return None
+
+    async def exchange(self, frame: dict, timeout: float = 5.0) -> dict:
+        """Send one frame and return the single reply frame."""
+        reader, writer = await self.open_connection()
+        try:
+            sent = await self._write(writer, (json.dumps(frame) + "\n").encode("utf-8"))
+            raw = await self._readline(reader, timeout) if sent else None
+            if not raw:
+                raise ConnectionError("rendezvous closed the TLS/TCP connection")
+            return json.loads(raw)
+        finally:
+            await self._close(writer)
+
+    async def pipeline(self, frames: Sequence[dict], timeout: float = 5.0) -> list[dict]:
+        """Send several frames on one connection; each gets a reply, in order."""
+        reader, writer = await self.open_connection()
+        try:
+            payload = "".join(json.dumps(f) + "\n" for f in frames).encode("utf-8")
+            if not await self._write(writer, payload):
+                raise ConnectionError("rendezvous closed the TLS/TCP connection")
+            replies = []
+            for _ in frames:
+                raw = await self._readline(reader, timeout)
+                if not raw:
+                    raise ConnectionError("rendezvous closed the TLS/TCP connection")
+                replies.append(json.loads(raw))
+            return replies
+        finally:
+            await self._close(writer)
+
+    async def send_raw(self, data: bytes, timeout: float = 1.0) -> RawResult:
+        """Send raw bytes, classify the visible reaction (mirrors ``RdvClient``)."""
+        reader, writer = await self.open_connection()
+        try:
+            if not await self._write(writer, data):
+                return RawResult(RawOutcome.CLOSED, None)
+            raw = await self._readline(reader, timeout)
+            if raw is None:
+                return RawResult(RawOutcome.SILENT, None)
+            if not raw:
+                return RawResult(RawOutcome.CLOSED, None)
+            return RawResult(RawOutcome.REPLY, raw)
+        finally:
+            await self._close(writer)

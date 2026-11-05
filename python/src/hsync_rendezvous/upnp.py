@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from collections.abc import Sequence
 
 import hsync_common.upnp as _shared_upnp
 from hsync_common.upnp import (
@@ -67,16 +68,27 @@ def _first_igd_location(sock: socket.socket, timeout: float, local_ip: str) -> I
 
 
 class UpnpManager:
-    """Asyncio zero-touch UPnP: map the QUIC listener port, refresh, and unmap.
+    """Asyncio zero-touch UPnP: map the node's listener ports, refresh, and unmap.
 
     Stateless by design: rendezvous failure or an absent IGD is reported once on
     the always-on diagnostics channel and retried at the next cycle — the node
     keeps serving normally (the operator may instead open the port manually).
 
+    The node serves both transports on one port, so by default every mapping is
+    applied to ``UDP`` (QUIC) and ``TCP`` (TLS/TCP) together: peers reachable over
+    either egress path are covered by the same router rule. A node started with
+    ``--no-udp``/``--no-tcp`` passes only its enabled transports, so a disabled
+    transport is never mapped.
+
     The mapping lifetime mirrors the process: the finite lease (twice the
     refresh interval) reclaims a mapping orphaned by a crash, and :meth:`close`
     removes it on graceful shutdown.
     """
+
+    # Transport protocols one node port is offered as: the two ``rdv/1``
+    # transports (QUIC/UDP and TLS/TCP). The CLI narrows this set to the
+    # transports actually enabled.
+    DEFAULT_PROTOCOLS = ("UDP", "TCP")
 
     def __init__(
         self,
@@ -84,12 +96,19 @@ class UpnpManager:
         *,
         external_port: int | None = None,
         refresh_interval: float = 300.0,
+        protocols: Sequence[str] = DEFAULT_PROTOCOLS,
     ) -> None:
         self.internal_port = internal_port
         self.external_port = external_port if external_port is not None else internal_port
         self.refresh_interval = refresh_interval
+        self.protocols = tuple(protocols)
         self._active: IgdService | None = None
         self._reported_missing = False
+
+    @property
+    def _proto_label(self) -> str:
+        """Diagnostics label for the mapped transports (``udp``/``tcp``/``udp/tcp``)."""
+        return "/".join(protocol.lower() for protocol in self.protocols)
 
     @property
     def _lease_duration(self) -> int:
@@ -108,7 +127,7 @@ class UpnpManager:
             await asyncio.sleep(self.refresh_interval)
 
     async def close(self) -> None:
-        """Remove the mapping (best-effort) so the router keeps no stale rule.
+        """Remove the mappings (best-effort) so the router keeps no stale rule.
 
         Cancel the refresh task first (``_async_main`` does): a live loop could
         re-add what this deletes. A failure is a warning, never an exception, and
@@ -123,7 +142,7 @@ class UpnpManager:
         except UpnpError as exc:
             warn_event("upnp unmap failed", reason=exc)
         else:
-            debug_event("upnp mapping removed", port=self.external_port, proto="udp")
+            debug_event("upnp mappings removed", port=self.external_port, proto=self._proto_label)
 
     def _ensure_mapped(self) -> None:
         service = self._active
@@ -136,18 +155,21 @@ class UpnpManager:
                 return
             self._add_mapping(service)
             self._active = service
-            debug_event("upnp mapping active", port=self.external_port, proto="udp")
+            debug_event("upnp mapping active", port=self.external_port, proto=self._proto_label)
             return
-        # Refresh the existing mapping (idempotent AddPortMapping).
+        # Refresh the existing mappings (idempotent AddPortMapping).
         self._add_mapping(service)
 
     def _add_mapping(self, service: IgdService) -> None:
-        add_port_mapping(
-            service,
-            internal_port=self.internal_port,
-            external_port=self.external_port,
-            lease_duration=self._lease_duration,
-        )
+        for protocol in self.protocols:
+            add_port_mapping(
+                service,
+                internal_port=self.internal_port,
+                external_port=self.external_port,
+                lease_duration=self._lease_duration,
+                protocol=protocol,
+            )
 
     def _delete_mapping(self, service: IgdService) -> None:
-        delete_port_mapping(service, external_port=self.external_port, protocol="UDP")
+        for protocol in self.protocols:
+            delete_port_mapping(service, external_port=self.external_port, protocol=protocol)

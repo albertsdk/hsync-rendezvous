@@ -16,9 +16,11 @@ written to disk (no-log).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import os
-import re
+import socket
+import ssl
 import stat
 import tempfile
 import time
@@ -26,21 +28,22 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from aioquic.asyncio import serve
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import ConnectionTerminated, QuicEvent
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from hsync_common import ssl_utils
+from hsync_common.protocol.rendezvous import RDV_ALPN, RDV_IDLE_TIMEOUT
 
 from hsync_rendezvous.diagnostics import debug_enabled, debug_event, error_event, warn_event
 from hsync_rendezvous.framing import FrameTooLarge, read_ndjson
 from hsync_rendezvous.handler import RendezvousHandler
+from hsync_rendezvous.protocol import BucketProto
 from hsync_rendezvous.ratelimit import TokenBucketLimiter
 from hsync_rendezvous.relay import PrefixedReader, RelayHandoff
 from hsync_rendezvous.stats import NodeStats
@@ -55,10 +58,12 @@ __all__ = [
     "MAX_RELAY_STREAMS_PER_CONNECTION",
     "MAX_SESSIONS_PER_CONNECTION",
     "RendezvousQuicProtocol",
+    "RendezvousTcpProtocol",
     "ConnectionGuard",
     "IdentityError",
     "NodeIdentity",
     "build_quic_configuration",
+    "build_tls_context",
     "load_identity",
     "load_or_create_identity",
     "make_identity",
@@ -66,12 +71,13 @@ __all__ = [
     "rotation_hint",
     "start_server",
     "start_servers",
+    "start_tcp_server",
+    "start_tcp_servers",
 ]
 
-# ALPN protocol advertised on the QUIC handshake (client and server must agree).
-RDV_ALPN = "hsync-rdv/1"
-# Spec: idle connections are dropped after 30 s.
-RDV_IDLE_TIMEOUT = 30.0
+# ``RDV_ALPN`` and ``RDV_IDLE_TIMEOUT`` are the hsync-common wire SSOT
+# (``hsync_common.protocol.rendezvous``), imported above so the node and the
+# client can never handshake on different ALPN or idle windows.
 # Ingress bound for one rdv/1 frame (a register carries at most 16 endpoints).
 # What the node *emits* is bounded separately by protocol.MAX_RESPONSE_BYTES.
 MAX_FRAME_BYTES = 8192
@@ -110,13 +116,10 @@ MAX_DATA_BYTES = MAX_RELAY_STREAMS_PER_CONNECTION * MAX_STREAM_DATA_BYTES
 # HSYNC service identities are always ECDSA P-256 (ADR-0037).
 PrivateKey = ec.EllipticCurvePrivateKey
 
-# PEM block extractors for the combined ``identity.pem`` (cert + private key).
-_CERT_PEM_RE = re.compile(rb"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", re.DOTALL)
-_KEY_PEM_RE = re.compile(rb"-----BEGIN PRIVATE KEY-----.+?-----END PRIVATE KEY-----", re.DOTALL)
-
-# Identity file/dir permissions: a long-lived private key must not be world-readable.
-_IDENTITY_FILE_MODE = 0o600
-_IDENTITY_DIR_MODE = 0o700
+# Identity file/dir permissions: a long-lived private key must not be
+# world-readable (shared service-identity model, ADR-0037).
+_IDENTITY_FILE_MODE = ssl_utils.KEY_FILE_MODE
+_IDENTITY_DIR_MODE = ssl_utils.IDENTITY_DIR_MODE
 
 
 class NodeIdentity:
@@ -157,15 +160,6 @@ def _generate_identity(host: str, public_hosts: Sequence[str]) -> NodeIdentity:
     return NodeIdentity(certificate=cert, private_key=key)
 
 
-def _identity_pem(identity: NodeIdentity) -> bytes:
-    """Serialize a combined cert + unencrypted PKCS#8 key PEM payload."""
-    return (
-        ssl_utils.serialize_cert_pem(identity.certificate)
-        + b"\n"
-        + ssl_utils.serialize_private_key_unencrypted(identity.private_key)
-    )
-
-
 def _key_matches_certificate(certificate: x509.Certificate, private_key: PrivateKey) -> bool:
     """True when ``private_key`` is the key behind ``certificate``'s public key.
 
@@ -186,30 +180,28 @@ def make_identity(host: str = "0.0.0.0", *, public_hosts: Sequence[str] = ()) ->
     return _generate_identity(host, public_hosts)
 
 
-def _ensure_identity_dir(identity_path: Path) -> None:
-    """Create the identity directory with ``0700``, never re-permission one we did not create.
+def _warn_if_identity_dir_writable(identity_path: Path) -> None:
+    """Warn when an existing identity directory is group/world writable.
 
     ``--identity`` may point into a directory this process does not own (a shared
-    state tree, a bind-mounted volume, ``/tmp``): tightening its permissions
-    unconditionally would break every other user of that path. A directory we
-    create is ``0700``; a pre-existing one is reported when it is
-    group/world-writable and left untouched.
+    state tree, a bind-mounted volume, ``/tmp``): the directory is never
+    re-permissioned (a directory we create is ``0700``, see
+    :func:`hsync_common.ssl_utils.ensure_identity_dir`), but an operator is told
+    when the one they supplied is too permissive for a private key.
     """
     parent = identity_path.parent
-    if parent.exists():
-        try:
-            mode = stat.S_IMODE(parent.stat().st_mode)
-        except OSError as exc:
-            raise IdentityError(f"could not stat identity directory {parent}: {exc}") from exc
-        if mode & 0o022:
-            warn_event(
-                "identity directory is group/world writable",
-                path=str(parent),
-                reason=f"mode {oct(mode)}; use 0700 for the private key directory",
-            )
+    if not parent.exists():
         return
-    parent.mkdir(parents=True, exist_ok=True, mode=_IDENTITY_DIR_MODE)
-    os.chmod(parent, _IDENTITY_DIR_MODE)
+    try:
+        mode = stat.S_IMODE(parent.stat().st_mode)
+    except OSError as exc:
+        raise IdentityError(f"could not stat identity directory {parent}: {exc}") from exc
+    if mode & 0o022:
+        warn_event(
+            "identity directory is group/world writable",
+            path=str(parent),
+            reason=f"mode {oct(mode)}; use 0700 for the private key directory",
+        )
 
 
 def load_or_create_identity(
@@ -231,25 +223,14 @@ def load_or_create_identity(
         return load_identity(identity_path)
 
     identity = _generate_identity(host, public_hosts)
-    _ensure_identity_dir(identity_path)
-    _atomic_write_identity(identity_path, _identity_pem(identity))
+    _warn_if_identity_dir_writable(identity_path)
+    _atomic_write_identity(identity_path, identity)
     return identity
 
 
 def _san_names(certificate: x509.Certificate) -> list[str]:
-    """Return the DNS and IP SANs of ``certificate`` as strings.
-
-    Rotation preserves these names; other GeneralName types (URI, email, …) are
-    never produced by the rendezvous, so they are intentionally ignored.
-    """
-    try:
-        san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    except x509.ExtensionNotFound:
-        return []
-    return [
-        *san.get_values_for_type(x509.DNSName),
-        *(str(address) for address in san.get_values_for_type(x509.IPAddress)),
-    ]
+    """Return the DNS and IP SANs of *certificate* (shared helper)."""
+    return ssl_utils.identity_san_names(certificate)
 
 
 def rotation_hint(path: str | Path) -> str:
@@ -286,7 +267,7 @@ def rotate_identity(
     # Keep every hostname the node was reachable under: a rotation that silently
     # dropped a SAN would break hostname-validating clients even with a valid pin.
     identity = _generate_identity(host, [*_san_names(old_certificate), *public_hosts])
-    _atomic_write_identity(identity_path, _identity_pem(identity))
+    _atomic_write_identity(identity_path, identity)
     return identity
 
 
@@ -312,23 +293,21 @@ def _parse_identity_file(identity_path: Path) -> tuple[x509.Certificate, Private
         data = identity_path.read_bytes()
     except OSError as exc:
         raise IdentityError(f"could not read identity file {identity_path}: {exc}") from exc
-    cert_match = _CERT_PEM_RE.search(data)
-    key_match = _KEY_PEM_RE.search(data)
-    if cert_match is None or key_match is None:
+    try:
+        return ssl_utils.parse_identity_pem(data)
+    except ssl_utils.IdentityPemMissingError as exc:
         raise IdentityError(
             f"identity file {identity_path} must contain a certificate and a "
             "PKCS#8 private key; delete it and restart to regenerate"
-        )
-    try:
-        cert = x509.load_pem_x509_certificate(cert_match.group(0))
-        key = serialization.load_pem_private_key(key_match.group(0), password=None)
-    except ValueError as exc:
+        ) from exc
+    except ssl_utils.IdentityKeyTypeError as exc:
+        raise IdentityError(
+            f"identity file {identity_path} must hold an ECDSA P-256 private key"
+        ) from exc
+    except ssl_utils.IdentityPemInvalidError as exc:
         raise IdentityError(
             f"identity file {identity_path} is not a valid PEM identity: {exc}"
         ) from exc
-    if not isinstance(key, ec.EllipticCurvePrivateKey):
-        raise IdentityError(f"identity file {identity_path} must hold an ECDSA P-256 private key")
-    return cert, key
 
 
 def _load_identity_file(identity_path: Path) -> NodeIdentity:
@@ -372,33 +351,19 @@ def _load_identity_file(identity_path: Path) -> NodeIdentity:
     return NodeIdentity(certificate=cert, private_key=key)
 
 
-def _atomic_write_identity(identity_path: Path, payload: bytes) -> None:
-    """Write the identity file atomically with owner-only permissions.
+def _atomic_write_identity(identity_path: Path, identity: NodeIdentity) -> None:
+    """Write the combined identity atomically, owner-only, creating the directory.
 
-    The temporary file gets a **unique** name in the target directory: a crash
-    (SIGKILL between create and replace) can leave a temp behind, and with a
-    fixed name that leftover would block every later write on the exclusive
-    creation flag, because the ``finally`` cleanup never runs after SIGKILL.
-    A unique name means a stale temp can never block a later write; ``mkstemp``
-    creates the file ``0600``, it is chmodded explicitly and handed to
-    ``os.replace``, so a reader never observes a partial identity.
+    Delegates to the shared service-identity writer
+    (:func:`hsync_common.ssl_utils.write_identity_file`), so the durability and
+    permission policy is defined once.
     """
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{identity_path.name}.", suffix=".tmp", dir=identity_path.parent
+    ssl_utils.write_identity_file(
+        identity_path,
+        ssl_utils.serialize_cert_pem(identity.certificate),
+        ssl_utils.serialize_private_key_unencrypted(identity.private_key),
+        mode=_IDENTITY_FILE_MODE,
     )
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, _IDENTITY_FILE_MODE)
-        os.replace(tmp, identity_path)
-    finally:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
 
 
 def _sans_for(host: str, public_hosts: Sequence[str]) -> list[x509.GeneralName]:
@@ -473,6 +438,16 @@ class ConnectionGuard:
         self._active_max = active_max
         self._global_max = global_max
         self._total_active = 0
+        # Open-connection level per transport (``quic``/``tcp``): the global
+        # ceiling spans both, but the per-transport level is what tells an
+        # operator how much of it each transport holds.
+        self._per_transport: dict[str, int] = {}
+        # Metric levels (open connections, per transport and total) kept apart
+        # from the admission counts above: a TCP relay attach that was exempted
+        # no longer competes for the per-IP/global budget, but the metrics keep
+        # counting it until the connection really closes.
+        self._metric_total = 0
+        self._metric_per_transport: dict[str, int] = {}
         # Seconds an IP must stay quiet (with all of its connections closed)
         # before evict_stale() forgets it: capacity/rate refills the bucket to
         # exactly the first-use value, so forgetting is decision-neutral.
@@ -480,13 +455,15 @@ class ConnectionGuard:
         # ip -> open connection count + last-seen stamp (see evict_stale).
         self._active: dict[str, _PeerState] = {}
 
-    def admit(self, peer_ip: str, *, now: float | None = None) -> bool:
+    def admit(self, peer_ip: str, *, transport: str = "quic", now: float | None = None) -> bool:
         """Admit one new (connecting) connection from ``peer_ip``.
 
         Returns False when the IP has no handshake budget left, already holds
         ``active_max`` open connections, or the process-wide ``global_max``
         ceiling would be exceeded; the caller must then refuse the connection
-        instead of running its handshake.
+        instead of running its handshake. ``transport`` tags the connection
+        (``quic``/``tcp``) for the per-transport level; ``global_max`` spans
+        every transport.
         """
         now = time.monotonic() if now is None else now
         entry = self._active.get(peer_ip)
@@ -504,18 +481,60 @@ class ConnectionGuard:
             entry.count += 1
             entry.last_seen = now
         self._total_active += 1
-        self.stats.connections_changed(self._total_active, opened=True)
+        self._per_transport[transport] = self._per_transport.get(transport, 0) + 1
+        self._metric_total += 1
+        self._metric_per_transport[transport] = self._metric_per_transport.get(transport, 0) + 1
+        self.stats.connections_changed(self._metric_total, opened=True)
+        self.stats.transport_connections_changed(
+            transport, self._metric_per_transport[transport], opened=True
+        )
         return True
 
-    def release(self, peer_ip: str, *, now: float | None = None) -> None:
-        """Mark one connection from ``peer_ip`` as closed."""
+    def release(self, peer_ip: str, *, transport: str = "quic", now: float | None = None) -> None:
+        """Mark one admitted connection from ``peer_ip`` as closed (full accounting)."""
+        self._admission_release(peer_ip, transport, now)
+        self._metrics_release(transport)
+
+    def exempt(self, peer_ip: str, *, transport: str = "tcp", now: float | None = None) -> None:
+        """Return one admitted connection's generic admission (TCP relay fan-out).
+
+        The inverse of :meth:`admit` for a connection that belongs to a relay
+        listener's fan-out: a TLS/TCP listener opens one connection per
+        ``relay_attach``, and those are bounded by the relay session quotas, not
+        the generic per-IP connection/handshake budget. Once the relay registry
+        matches an attach it calls this through the connection's admission
+        handle: the per-IP and process-wide active counts drop and the handshake
+        token is refunded (never above ``handshake_burst``). Only the admission
+        accounting is adjusted here — the metrics keep counting the open
+        connection until it really closes (:meth:`release_metrics`).
+        """
+        self._admission_release(peer_ip, transport, now)
+        self._handshakes.refund(peer_ip)
+
+    def release_metrics(self, *, transport: str = "tcp") -> None:
+        """Decrement the metric level for one closing exempted connection."""
+        self._metrics_release(transport)
+
+    def _admission_release(self, peer_ip: str, transport: str, now: float | None) -> None:
         self._total_active = max(0, self._total_active - 1)
-        self.stats.connections_changed(self._total_active)
+        self._per_transport[transport] = max(0, self._per_transport.get(transport, 0) - 1)
         entry = self._active.get(peer_ip)
         if entry is None:
             return
         entry.count = max(0, entry.count - 1)
         entry.last_seen = time.monotonic() if now is None else now
+
+    def _metrics_release(self, transport: str) -> None:
+        self._metric_total = max(0, self._metric_total - 1)
+        self._metric_per_transport[transport] = max(
+            0, self._metric_per_transport.get(transport, 0) - 1
+        )
+        self.stats.connections_changed(self._metric_total)
+        self.stats.transport_connections_changed(transport, self._metric_per_transport[transport])
+
+    def transport_count(self, transport: str) -> int:
+        """Open connections currently admitted for one transport (``quic``/``tcp``)."""
+        return self._per_transport.get(transport, 0)
 
     def open_count(self, peer_ip: str) -> int:
         """Active connections currently accounted for (``0`` when unknown)."""
@@ -570,6 +589,81 @@ def build_quic_configuration(
     return config
 
 
+async def _serve_rdv_session(
+    *,
+    handler: RendezvousHandler,
+    reader: Any,
+    writer: Any,
+    peer_ip: str,
+    peer_port: int,
+    proto: BucketProto,
+    idle_timeout: float | None = None,
+    admission: Any | None = None,
+    on_relay_handoff: Callable[[], None] | None = None,
+) -> None:
+    """Run one ``rdv/1`` request loop over a byte stream.
+
+    Transport-agnostic: the QUIC listener calls this once per bidirectional
+    stream (no idle timer, no admission handle), the TLS/TCP connection once per
+    connection (``idle_timeout`` reaps a silent peer and ``admission`` is the
+    connection's handle, returned to the relay once an ``relay_attach`` matches).
+    On a ``RelayHandoff`` the same reader/writer are handed to the relay —
+    ``pending`` bytes already read past the handshake newline included — and this
+    loop returns; the caller owns the transport teardown. Keeping one loop here
+    is what stops the two transports from drifting.
+    """
+    peer = f"{peer_ip}:{peer_port}"
+    pending = bytearray()
+    try:
+        while True:
+            raw = await read_ndjson(
+                reader, pending, max_bytes=MAX_FRAME_BYTES, idle_timeout=idle_timeout
+            )
+            if raw is None:
+                return  # EOF (client closes first) or the idle timeout
+            response = handler.handle(raw, peer_ip=peer_ip, peer_port=peer_port, proto=proto)
+            if isinstance(response, RelayHandoff):
+                # The relay takes the connection/stream over: from here on the
+                # bytes are opaque TLS, so the NDJSON loop must never consume
+                # them. ``pending`` may already hold the first opaque bytes.
+                if on_relay_handoff is not None:
+                    on_relay_handoff()
+                stream_reader: Any = reader
+                if pending:
+                    stream_reader = PrefixedReader(bytes(pending), reader)
+                    pending.clear()
+                await handler.relay.run(
+                    response,
+                    reader=stream_reader,
+                    writer=writer,
+                    peer_ip=peer_ip,
+                    admission=admission,
+                )
+                return
+            if response is not None:
+                writer.write(response + b"\n")
+                await writer.drain()
+    except FrameTooLarge:
+        debug_event("drop oversized-frame", peer=peer)
+        return  # oversized frame: refuse and close the session silently
+    except asyncio.CancelledError:
+        # Cancellation is control flow, not a session failure: re-raise so the
+        # owning task is really cancelled. The caller still tears the transport
+        # down (QUIC stream task, or RendezvousTcpProtocol._handshake's finally).
+        raise
+    except (ConnectionError, TimeoutError, OSError):
+        return
+    except Exception as exc:  # noqa: BLE001 - one session must not take the node down
+        # Unexpected failure in one session: the listener and every other session
+        # stay up (isolation), but the operator must still see it — the always-on
+        # error channel carries the exception CLASS only, no peer identity.
+        error_event("session failed", exc=type(exc).__name__)
+        if debug_enabled():
+            # The opt-in peer-aware channel gets the exception detail too: it may
+            # name the failing input, which is exactly what --debug is for.
+            debug_event("session failure detail", exc=type(exc).__name__, error=repr(exc))
+
+
 class RendezvousQuicProtocol(QuicConnectionProtocol):
     """One QUIC/UDP connection; every bidirectional stream is a ``rdv/1`` session.
 
@@ -615,7 +709,7 @@ class RendezvousQuicProtocol(QuicConnectionProtocol):
         if first:
             guard = self.guard
             if guard is not None:
-                if not guard.admit(peer_ip):
+                if not guard.admit(peer_ip, transport="quic"):
                     debug_event("connection refused ip-guard", peer=peer_ip)
                     payload = data.encode("utf-8") if isinstance(data, str) else data
                     self._refuse_unadmitted(payload, addr)
@@ -650,7 +744,7 @@ class RendezvousQuicProtocol(QuicConnectionProtocol):
         ):
             self.admitted_on_guard = False
             ip = self.peer_addr[0] if self.peer_addr is not None else "0.0.0.0"
-            self.guard.release(ip)
+            self.guard.release(ip, transport="quic")
         super().quic_event_received(event)
 
     def _observed_peer(self) -> tuple[str, int]:
@@ -680,54 +774,22 @@ class RendezvousQuicProtocol(QuicConnectionProtocol):
     async def _serve_stream(self, reader: Any, writer: Any) -> None:
         peer_ip, peer_port = self._observed_peer()
         relay_stream = False
+
+        def _on_relay_handoff() -> None:
+            nonlocal relay_stream
+            relay_stream = True
+            self._relay_streams += 1
+
         try:
-            pending = bytearray()
-            while True:
-                raw = await read_ndjson(reader, pending, max_bytes=MAX_FRAME_BYTES)
-                if raw is None:
-                    return  # EOF: normal stream close, not a protocol drop
-                response = self.boot_handler.handle(
-                    raw,
-                    peer_ip=peer_ip,
-                    peer_port=peer_port,
-                )
-                if isinstance(response, RelayHandoff):
-                    # The relay takes the stream over: from here on the bytes are
-                    # opaque TLS, so the NDJSON loop must never consume them.
-                    # ``pending`` may already hold the first opaque bytes (the
-                    # frame read can pass the handshake newline), so it is handed
-                    # back to the relay instead of being dropped.
-                    self._relay_streams += 1
-                    relay_stream = True
-                    stream_reader = reader
-                    if pending:
-                        stream_reader = PrefixedReader(bytes(pending), reader)
-                        pending.clear()
-                    await self.boot_handler.relay.run(
-                        response, reader=stream_reader, writer=writer, peer_ip=peer_ip
-                    )
-                    return
-                if response is not None:
-                    writer.write(response + b"\n")
-                    await writer.drain()
-        except FrameTooLarge:
-            debug_event("drop oversized-frame", peer=f"{peer_ip}:{peer_port}")
-            return  # oversized frame: refuse and close the session silently
-        except (asyncio.CancelledError, ConnectionError, TimeoutError):
-            return
-        except Exception as exc:
-            # Unexpected failure in one session: the listener and every other
-            # session stay up (isolation), but the operator must still see it —
-            # the always-on error channel carries the exception CLASS only, no
-            # peer identity. Without this the traceback would reach asyncio's
-            # fallback handler in an unformatted, undocumented shape.
-            error_event("session failed", exc=type(exc).__name__)
-            if debug_enabled():
-                # The opt-in peer-aware channel gets the exception detail too: it
-                # may name the failing input, which is exactly what --debug is
-                # for. The always-on line above stays class-only and peer-free.
-                debug_event("session failure detail", exc=type(exc).__name__, error=repr(exc))
-            return
+            await _serve_rdv_session(
+                handler=self.boot_handler,
+                reader=reader,
+                writer=writer,
+                peer_ip=peer_ip,
+                peer_port=peer_port,
+                proto="udp",
+                on_relay_handoff=_on_relay_handoff,
+            )
         finally:
             debug_event("session close", peer=f"{peer_ip}:{peer_port}")
             if relay_stream:
@@ -832,6 +894,394 @@ async def start_server(
         retry=retry,
         identity=identity,
         idle_timeout=idle_timeout,
+        connection_guard=connection_guard,
+    )
+    return servers[0], bound_ports[0], identity
+
+
+# ---------------------------------------------------------------------------
+# TLS/TCP transport
+# ---------------------------------------------------------------------------
+# One connection = one ``rdv/1`` session. Bounded handshake so a stalled TLS
+# handshake (slow-loris, a dead client) cannot pin the guard's active slot
+# indefinitely. QUIC bounds the same hazard through aioquic's own handshake
+# timeout, so this constant applies to the TLS/TCP accept path only.
+TCP_HANDSHAKE_TIMEOUT = 10.0
+# Listen backlog of the TLS/TCP listener (the asyncio default, made explicit).
+TCP_LISTEN_BACKLOG = 100
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    """Write every byte of *payload* to *fd* (a short ``os.write`` is retried)."""
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
+
+
+def _memfd(payload: bytes) -> int | None:
+    """Anonymous in-memory file holding *payload*, or ``None`` where unsupported.
+
+    ``os.memfd_create`` exists on Linux only (Python 3.8+); a hardened kernel
+    may still refuse it. Returning ``None`` is not an error — the caller falls
+    back to an owner-only temp file — but on Linux it is what keeps
+    ``run --ephemeral`` (and, harmlessly, a persistent identity too) from ever
+    putting the private key on a filesystem.
+    """
+    creator = getattr(os, "memfd_create", None)
+    if creator is None:
+        return None
+    try:
+        fd = creator("hsync-rdv-tls", 0)
+    except OSError:
+        return None
+    try:
+        _write_all(fd, payload)
+        os.lseek(fd, 0, os.SEEK_SET)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def _load_cert_chain_from_memory(context: ssl.SSLContext, payload: bytes) -> None:
+    """Load a combined PEM certificate+key into *context* without a plaintext key file.
+
+    ``ssl.SSLContext.load_cert_chain`` accepts only a path, so the combined PEM
+    (the node's own identity, never peer data) is handed to it through an
+    anonymous memfd on Linux — read via ``/proc/self/fd/N`` — so the private key
+    never touches a filesystem even with ``--ephemeral``. Where ``memfd_create``
+    is unavailable (macOS/Windows) it falls back to an owner-only ``0600`` temp
+    file, loaded and unlinked immediately.
+    """
+    fd = _memfd(payload)
+    if fd is not None:
+        try:
+            context.load_cert_chain(f"/proc/self/fd/{fd}")
+            return
+        except OSError:
+            # No /proc, or the load refused the fd: fall through to the temp-file
+            # path rather than failing with an opaque error.
+            pass
+        finally:
+            os.close(fd)
+    file_fd, path = tempfile.mkstemp(prefix="hsync-rdv-tls-", suffix=".pem")
+    try:
+        with os.fdopen(file_fd, "wb") as handle:
+            handle.write(payload)
+        context.load_cert_chain(path)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+
+
+def build_tls_context(identity: NodeIdentity) -> ssl.SSLContext:
+    """Server-side TLS 1.3 context bound to the node's identity (ALPN ``hsync-rdv/1``).
+
+    The combined PEM is loaded from memory (memfd on Linux, an unlinked temp file
+    elsewhere) because ``load_cert_chain`` takes a path, not bytes. TLS 1.2 and
+    below are refused. The ALPN token is enforced on both sides of the handshake:
+    Python's server-side ALPN does not abort a connection whose offer does not
+    overlap, so :class:`RendezvousTcpProtocol` closes one whose
+    ``selected_alpn_protocol()`` is not :data:`RDV_ALPN` (parity with the aioquic
+    listener, which the handshake rejects).
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.set_alpn_protocols([RDV_ALPN])
+    payload = ssl_utils.serialize_identity_pem(
+        ssl_utils.serialize_cert_pem(identity.certificate),
+        ssl_utils.serialize_private_key_unencrypted(identity.private_key),
+    )
+    _load_cert_chain_from_memory(context, payload)
+    return context
+
+
+class RendezvousTcpProtocol(asyncio.Protocol):
+    """One TLS/TCP connection = one ``rdv/1`` session.
+
+    A plain :class:`asyncio.Protocol` because admission must run before the TLS
+    handshake **and before any byte is read**: ``loop.create_server`` (no ``ssl``)
+    hands the connection here first, so :meth:`connection_made` reads the observed
+    ``peername``, charges the :class:`ConnectionGuard` (refusal →
+    ``transport.abort()``, no handshake work) and only then upgrades to TLS with
+    ``loop.start_tls``. Running the handshake in a ``start_server`` callback
+    instead would race: the client's ClientHello may already sit in the
+    ``StreamReader`` buffer and would be lost to TLS.
+
+    One connection carries one session (several frames may be pipelined on it):
+    the one-shot exchange (``register``/``refresh``/``leave``/``query``), the
+    relay requester's data connection (``relay_connect``) and the relay
+    listener's control connection (``relay_listen``). A relay ``relay_attach`` is
+    a fresh connection too, so its admission can be returned once the registry
+    matches it (:meth:`exempt`).
+    """
+
+    def __init__(
+        self,
+        handler: RendezvousHandler,
+        context: ssl.SSLContext,
+        guard: ConnectionGuard | None = None,
+    ) -> None:
+        self._handler = handler
+        self._context = context
+        self._guard = guard
+        self._transport: asyncio.BaseTransport | None = None
+        self._peer_ip = "0.0.0.0"
+        self._peer_port = 0
+        self._admitted = False
+        self._released = False
+        self._exempted = False
+        self._task: asyncio.Task[None] | None = None
+
+    # -- admission + handshake ------------------------------------------------
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self._transport = transport
+        peer = transport.get_extra_info("peername")
+        if peer is not None:
+            # IPv4/IPv6 peername is (host, port[, flowinfo, scope_id]); only the
+            # observed source is used, exactly as the QUIC listener derives it,
+            # so the per-IP guards, rate limits and the relay peer_ip check agree.
+            self._peer_ip = str(peer[0])
+            self._peer_port = int(peer[1])
+        # asyncio.Protocol declares ``BaseTransport``, but the concrete socket
+        # transport is both a ReadTransport and a WriteTransport; narrow it back
+        # to the halves that carry ``abort``/``pause_reading``/``start_tls``.
+        write_transport = cast(asyncio.WriteTransport, transport)
+        guard = self._guard
+        if guard is not None:
+            if not guard.admit(self._peer_ip, transport="tcp"):
+                debug_event("tcp connection refused ip-guard", peer=self._peer_ip)
+                write_transport.abort()
+                return
+            self._admitted = True
+        # No byte is read before the handshake: pause so a client's ClientHello
+        # cannot land in the StreamReader buffer as plaintext (start_tls resumes
+        # reading once the TLS protocol is installed).
+        cast(asyncio.ReadTransport, transport).pause_reading()
+        self._task = asyncio.create_task(self._handshake(write_transport))
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        # Fires only before start_tls takes over as the connection's protocol
+        # (abort, a client that disconnects during or without the handshake); the
+        # post-TLS path releases from _handshake's finally.
+        self._release()
+
+    def eof_received(self) -> bool:
+        # Keep asyncio's half-open semantics for TCP streams.
+        return False
+
+    async def _handshake(self, transport: asyncio.WriteTransport) -> None:
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader(limit=MAX_STREAM_DATA_BYTES)
+        protocol = asyncio.StreamReaderProtocol(reader)
+        try:
+            new_transport = await loop.start_tls(
+                transport,
+                protocol,
+                self._context,
+                server_side=True,
+                ssl_handshake_timeout=TCP_HANDSHAKE_TIMEOUT,
+            )
+        except (ssl.SSLError, ConnectionError, TimeoutError, OSError):
+            self._release()
+            transport.abort()
+            return
+        if new_transport is None:
+            # ``start_tls`` returns None when the transport is already closing:
+            # there is no TLS session to serve, so release and stop.
+            self._release()
+            return
+        ssl_object = new_transport.get_extra_info("ssl_object")
+        selected = ssl_object.selected_alpn_protocol() if ssl_object is not None else None
+        if selected != RDV_ALPN:
+            # Python's server-side ALPN does not abort on no overlap: enforce it
+            # here, in parity with the aioquic listener. ``selected`` is None when
+            # the client offered no ALPN at all. A graceful close (FIN) is used
+            # instead of ``abort()`` so a client sees a clean EOF, not a reset.
+            debug_event("tcp alpn refused", peer=self._peer_ip, alpn=selected)
+            self._release()
+            new_transport.close()
+            return
+        writer = asyncio.StreamWriter(
+            cast(asyncio.WriteTransport, new_transport), protocol, reader, loop
+        )
+        try:
+            await self._serve(reader, writer)
+        finally:
+            self._release()
+            if not writer.is_closing():
+                writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+    # -- session --------------------------------------------------------------
+
+    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        # One shared, transport-agnostic session loop: only the idle timer (a
+        # silent peer is reaped) and the admission handle (relay-attach fan-out)
+        # differ from the QUIC stream path.
+        await _serve_rdv_session(
+            handler=self._handler,
+            reader=reader,
+            writer=writer,
+            peer_ip=self._peer_ip,
+            peer_port=self._peer_port,
+            proto="tcp",
+            idle_timeout=RDV_IDLE_TIMEOUT,
+            admission=self,
+        )
+
+    # -- admission accounting -------------------------------------------------
+
+    def _release(self) -> None:
+        """Release this connection's accounting exactly once.
+
+        An exempted connection returns its admission at exemption time; the
+        metrics keep counting it until it really closes, so the close still
+        decrements the metric level (``release_metrics``) without touching the
+        admission accounting again.
+        """
+        if not self._admitted or self._released:
+            return
+        self._released = True
+        guard = self._guard
+        if guard is None:
+            return
+        if self._exempted:
+            guard.release_metrics(transport="tcp")
+        else:
+            guard.release(self._peer_ip, transport="tcp")
+
+    def exempt(self) -> None:
+        """Return this connection's generic admission (relay-attach fan-out).
+
+        Called by :meth:`hsync_rendezvous.relay.RelayRegistry._attach` once a
+        ``relay_attach`` matches a pending session: the attach is then bounded by
+        the relay session quotas, so its handshake token and active slot are
+        returned. Idempotent; a later close does not release again.
+        """
+        if not self._admitted or self._released or self._exempted:
+            return
+        self._exempted = True
+        guard = self._guard
+        if guard is not None:
+            guard.exempt(self._peer_ip, transport="tcp")
+
+
+def _tcp_protocol_factory(
+    handler: RendezvousHandler,
+    context: ssl.SSLContext,
+    guard: ConnectionGuard | None,
+) -> Callable[[], RendezvousTcpProtocol]:
+    """Build the ``loop.create_server`` protocol factory for one shared handler."""
+
+    def _create() -> RendezvousTcpProtocol:
+        return RendezvousTcpProtocol(handler, context, guard)
+
+    return _create
+
+
+def _bind_tcp_socket(host: str, port: int) -> socket.socket:
+    """Bind and listen on one TCP socket (first address that binds wins).
+
+    Uses the resolver so a hostname (or the ``::`` wildcard, with
+    ``IPV6_V6ONLY=0`` for dual-stack) binds like the QUIC listener would; a
+    concrete IP binds its own family. The socket is non-blocking, ready for
+    ``loop.create_server(..., sock=...)``.
+    """
+    last_exc: OSError | None = None
+    for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    ):
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                with contextlib.suppress(OSError):
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind(sockaddr)
+            sock.listen(TCP_LISTEN_BACKLOG)
+            sock.setblocking(False)
+            return sock
+        except OSError as exc:
+            last_exc = exc
+            sock.close()
+    if last_exc is not None:
+        raise last_exc
+    raise OSError(f"could not resolve {host}:{port}")
+
+
+async def start_tcp_servers(
+    host: str,
+    ports: Sequence[int],
+    handler: RendezvousHandler,
+    *,
+    identity: NodeIdentity | None = None,
+    connection_guard: ConnectionGuard | None = None,
+) -> tuple[list[asyncio.Server], list[int], NodeIdentity, list[tuple[int, BaseException]]]:
+    """Bind one TLS/TCP listener per port, all sharing ONE handler/identity/guard.
+
+    Same best-effort binding contract as :func:`start_servers`: a port that
+    cannot bind (address in use, permission, e.g. 443 already held by a co-hosted
+    HTTPS server) is skipped and reported in ``failures`` so the node still
+    starts on the ports that are free. Raises the first ``OSError`` only when
+    **no** port could be bound.
+    """
+    if not ports:
+        raise ValueError("start_tcp_servers requires at least one port")
+    identity = identity or make_identity(host)
+    context = build_tls_context(identity)
+    factory = _tcp_protocol_factory(handler, context, connection_guard)
+    loop = asyncio.get_running_loop()
+
+    servers: list[asyncio.Server] = []
+    bound_ports: list[int] = []
+    failures: list[tuple[int, BaseException]] = []
+    first_error: BaseException | None = None
+    for port in ports:
+        try:
+            sock = _bind_tcp_socket(host, port)
+        except OSError as exc:
+            failures.append((port, exc))
+            if first_error is None:
+                first_error = exc
+            continue
+        try:
+            server = await loop.create_server(factory, sock=sock)
+        except OSError as exc:
+            sock.close()
+            failures.append((port, exc))
+            if first_error is None:
+                first_error = exc
+            continue
+        bound_ports.append(int(sock.getsockname()[1]))
+        servers.append(server)
+    if not servers and first_error is not None:
+        raise first_error
+    return servers, bound_ports, identity, failures
+
+
+async def start_tcp_server(
+    host: str,
+    port: int,
+    handler: RendezvousHandler,
+    *,
+    identity: NodeIdentity | None = None,
+    connection_guard: ConnectionGuard | None = None,
+) -> tuple[asyncio.Server, int, NodeIdentity]:
+    """Start a single TLS/TCP listener and return ``(server, bound_port, identity)``.
+
+    Single-port form of :func:`start_tcp_servers` — the common one-listener case.
+    ``connection_guard`` adds the node-side per-IP handshake budget and
+    active-connection cap, charged before the TLS handshake.
+    """
+    servers, bound_ports, identity, _ = await start_tcp_servers(
+        host,
+        [port],
+        handler,
+        identity=identity,
         connection_guard=connection_guard,
     )
     return servers[0], bound_ports[0], identity

@@ -1,7 +1,7 @@
 # Getting Started — RPM package (RHEL/Rocky/Alma/Fedora)
 
 The `.rpm` installs the node as a hardened systemd service under a dynamic user
-with `CAP_NET_BIND_SERVICE` (so it can bind UDP 443), and provisions group keys
+with `CAP_NET_BIND_SERVICE` (so it can bind port 443 on UDP and TCP), and provisions group keys
 as a systemd credential. No Docker and no Python are required.
 
 > The RPM binaries are built on a Rocky Linux 9 baseline (glibc 2.34), so they
@@ -12,7 +12,7 @@ as a systemd credential. No Docker and no Python are required.
 
 - <img src="assets/os/redhat.svg" alt="Red Hat" width="16" height="16"> <img src="assets/os/fedora.svg" alt="Fedora" width="16" height="16"> RHEL, Rocky Linux, AlmaLinux (9+) or Fedora, on `x86_64` or `aarch64`
 - A root shell or `sudo`
-- A UDP port reachable from the Internet (443 by default)
+- A port reachable from the Internet (443 by default) over UDP and/or TCP — QUIC uses UDP, TLS/TCP uses TCP
 
 ## Install
 
@@ -35,7 +35,7 @@ To build from the checkout instead:
 ## Configure and run
 
 The package installs a hardened systemd unit (DynamicUser +
-`CAP_NET_BIND_SERVICE` so it can bind UDP 443; group keys exposed only as a
+`CAP_NET_BIND_SERVICE` so it can bind port 443 on UDP and TCP; group keys exposed only as a
 systemd credential) and **never enables the service automatically** — opt in
 with:
 
@@ -70,7 +70,7 @@ sudo systemctl edit hsync-rendezvous.service
 Environment=HSYNC_RENDEZVOUS_PRIVATE=1
 ```
 
-To also serve a second UDP port (for clients whose network blocks 443), replace
+To also serve a second port (for clients whose network blocks 443 on one transport), replace
 the unit's single `--listen-port` with `--listen-ports` in a drop-in, keeping
 the unit's `--keys-fd 5 5<"$CREDENTIALS_DIRECTORY/group-keys"` when you
 provisioned keys — see `--listen-ports` in

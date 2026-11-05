@@ -64,9 +64,10 @@ def test_unknown_outcomes_cannot_grow_the_series() -> None:
 def test_status_text_is_one_short_line() -> None:
     stats = NodeStats()
     stats.connections_changed(3, opened=True)
+    stats.transport_connections_changed("quic", 3, opened=True)
     stats.peers_changed(12, written=True)
     stats.relay_session_opened()
-    assert stats.status_text() == "conn=3/3 peers=12/12 relay=1/1"
+    assert stats.status_text() == "conn=3/3 quic=3 tcp=0 peers=12/12 relay=1/1"
     assert "\n" not in stats.status_text()
 
 
@@ -78,10 +79,11 @@ def test_exposition_has_a_fixed_cardinality_and_valid_types() -> None:
     body = stats.render_prometheus()
 
     samples = [line for line in body.splitlines() if line and not line.startswith("#")]
-    # 6 connection/peer gauges + 1 counter + 4 more gauges/counters per family +
-    # the 5 aggregate relay series + one line per closed outcome: pinned so a new
+    # 8 connection gauges/counters (4 families x the closed quic/tcp label set)
+    # + peer gauges/counters (5) + the 5 aggregate relay series + stats-write
+    # error + build/start (2) + one line per closed outcome: pinned so a new
     # label or series cannot slip in.
-    assert len(samples) == 17 + len(METRICS_OUTCOMES)
+    assert len(samples) == 21 + len(METRICS_OUTCOMES)
     for line in samples:
         assert _SAMPLE_RE.fullmatch(line), line
     for line in body.splitlines():
@@ -90,8 +92,13 @@ def test_exposition_has_a_fixed_cardinality_and_valid_types() -> None:
 
 
 def test_exposition_never_carries_peer_data() -> None:
-    """The only labels are the build identity and the closed outcome list."""
+    """The only labels are the build identity, the closed outcome and transports."""
     body = NodeStats().render_prometheus()
-    assert set(re.findall(r'([a-z_]+)="', body)) == {"version", "protocol", "outcome"}
+    assert set(re.findall(r'([a-z_]+)="', body)) == {
+        "version",
+        "protocol",
+        "outcome",
+        "transport",
+    }
     assert f'version="{__version__}"' in body
     assert 'protocol="rdv/1"' in body

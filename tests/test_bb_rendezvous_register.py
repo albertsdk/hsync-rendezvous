@@ -57,7 +57,7 @@ async def test_query_falls_back_to_observed_source(rendezvous_factory, bucket, r
     async with RdvClient(handle.port) as client:
         await client.exchange(register_frame(cid, bucket, endpoints=False))
         response = await client.exchange(query_frame(bucket))
-    # Then: the observed UDP source is relayed as the fallback endpoint
+    # Then: the observed source endpoint is relayed as the fallback endpoint
     assert response["type"] == "response"
     assert response["count"] == 1
     peer = response["peers"][0]

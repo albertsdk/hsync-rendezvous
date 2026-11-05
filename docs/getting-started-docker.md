@@ -9,7 +9,8 @@ the one-command installer instead, see
 
 - <img src="assets/os/linux.svg" alt="Linux" width="16" height="16"> <img src="assets/os/apple.svg" alt="macOS" width="16" height="16"> Linux or macOS with Docker Engine or Docker Desktop running
 - Docker Compose v2 (`docker compose version`)
-- A UDP port reachable from the Internet (443 by default)
+- A host port reachable from the Internet (443 by default), mapped for both
+  QUIC/UDP and TLS/TCP
 
 ## Install
 
@@ -38,8 +39,9 @@ reference [usage.md → Group keys](usage.md#group-keys---keys-fd----keys-file).
 `leave` and refuses to start with an empty keys file) — see
 [usage.md → Private node](usage.md#private-node-authenticated-rendezvous).
 
-The container binds the unprivileged UDP port `8443`; the host maps
-`RENDEZVOUS_HOST_UDP_PORT` (default `443`) to it. Verify the image signature before
+The container binds the unprivileged port `8443`; the host maps
+`RENDEZVOUS_HOST_PORT` (default `443`) to it for both transports (QUIC/UDP and
+TLS/TCP). Verify the image signature before
 starting (the released image is signed keyless by the release workflow), then
 start it:
 
@@ -64,7 +66,7 @@ A temporary `docker run` is useful only for a short smoke test:
 ```bash
 mkdir -p hsync-data
 docker run --rm -d --name hsync-rendezvous-test \
-  -p 443:8443/udp \
+  -p 443:8443/udp -p 443:8443/tcp \
   --user "$(id -u):$(id -g)" \
   -v "$(pwd)/hsync-data:/var/lib/hsync-rendezvous" \
   ghcr.io/albertsdk/hsync-rendezvous:v1.0.0 run --listen-port 8443
@@ -72,17 +74,20 @@ docker logs hsync-rendezvous-test
 docker stop hsync-rendezvous-test
 ```
 
-### Serve a second UDP port (optional)
+### Serve a second port (optional)
 
-The shipped Compose maps a single host UDP port to the container's internal
-port. To also answer clients whose network blocks UDP 443, listen on a second
-internal port and map it to another host port:
+The shipped Compose maps a single host port to the container's internal port for
+both transports. To also answer clients whose network blocks UDP 443 (and those
+that need TLS/TCP), listen on a second internal port and map it to another host
+port:
 
 ```yaml
 command: ["run", "--listen-host", "0.0.0.0", "--listen-ports", "8443,5353"]
 ports:
   - "443:8443/udp"
+  - "443:8443/tcp"
   - "53:5353/udp"
+  - "53:5353/tcp"
 ```
 
 Both ports share one routing table; the container keeps using unprivileged
@@ -95,7 +100,7 @@ To build from source, follow the build steps in
 
 `./docker.sh` also supports `stop`, `restart`, `status`, `logs -f`, `shell` and
 `clean`; it persists the identity under `./hsync-data`. Environment variables
-select the public port (`RENDEZVOUS_HOST_UDP_PORT`), private mode
+select the public port (`RENDEZVOUS_HOST_PORT`), private mode
 (`HSYNC_RENDEZVOUS_PRIVATE=1`) and the group keys
 (`HSYNC_RENDEZVOUS_KEYS_PATH=/path/to/group-keys`). Run `./docker.sh --help`.
 
@@ -107,8 +112,8 @@ docker compose logs | grep -i fingerprint
 ```
 
 `docker compose ps` also reports the container's health, which is the node's own
-readiness file: `healthy` means a QUIC/UDP listener is bound, not merely that the
-container is up.
+readiness file: `healthy` means at least one listener is bound (QUIC/UDP or
+TLS/TCP), not merely that the container is up.
 
 ## Manage and update
 

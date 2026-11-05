@@ -2,7 +2,8 @@
 
 `hsync-rendezvous` is the Internet rendezvous node of the HSYNC sync network: it
 tells P2P clients which peers are currently online without storing anything. It
-speaks the `rdv/1` protocol over QUIC (UDP, port 443 by default).
+speaks the `rdv/1` protocol over two interchangeable transports — QUIC/UDP and
+TLS/TCP (port 443 by default).
 
 Pick **one** installation method below and follow it to a running node. The
 methods are ordered from the simplest and most immediate to the most involved.
@@ -16,20 +17,24 @@ methods are ordered from the simplest and most immediate to the most involved.
 | 5 | **Windows installer** (`.exe`) | <img src="assets/os/windows.svg" alt="Windows" width="16" height="16"> | A Windows Server x64 host: per-machine install, registers a Windows service | [Windows installer](getting-started-windows.md) |
 | 6 | **From source** (clone and run) |  | Development, or a host where you control the toolchain | [Run from source](getting-started-source.md) |
 
-All methods result in the same node. The QUIC/UDP port must be reachable from
-the Internet (443 is the default; ports below 1024 need elevated privileges —
-the `.deb` systemd unit grants `CAP_NET_BIND_SERVICE`, the container binds an
-unprivileged port internally). The node can also listen on **several** UDP
-ports at once, so a client whose network blocks UDP 443 can still reach it on
-another port (e.g. 443 + 53) — see `--listen-ports` in
+All methods result in the same node. The node serves `rdv/1` over **QUIC/UDP
+and TLS/TCP** on the same ports; the port (443 by default) must be reachable
+from the Internet on UDP and/or TCP (ports below 1024 need elevated
+privileges — the `.deb` systemd unit grants `CAP_NET_BIND_SERVICE`, the
+container binds an unprivileged port internally). The node can also listen on
+**several** ports at once (both transports on each), so a client whose network
+blocks port 443 on one transport can still reach it on another port
+(e.g. 443 + 53) — see `--listen-ports` in
 [usage.md](usage.md#run-options).
 
 ## Requirements (all methods)
 
-- UDP port 443 (or another port) reachable from the Internet
-- Optional: a UPnP-capable router for zero-touch UDP port mapping (opt in with `--upnp`)
-- Optional: a **second** inbound UDP port (e.g. 53) if some clients' networks
-  block UDP 443 — see `--listen-ports` in [usage.md](usage.md#run-options)
+- Port 443 (or another port) reachable from the Internet over UDP and/or TCP —
+  the node serves QUIC/UDP and TLS/TCP on the same ports by default
+- Optional: a UPnP-capable router for zero-touch port mapping on both transports
+  (opt in with `--upnp`)
+- Optional: a **second** inbound port (e.g. 53) if some clients' networks block
+  443 on one transport — see `--listen-ports` in [usage.md](usage.md#run-options)
 
 ## How it works in one paragraph
 

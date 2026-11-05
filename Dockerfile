@@ -79,9 +79,10 @@ ENV PATH="/venv/bin:$PATH" \
     HSYNC_RENDEZVOUS_IDENTITY=/var/lib/hsync-rendezvous/identity.pem \
     HSYNC_RENDEZVOUS_READY_FILE=/var/lib/hsync-rendezvous/ready.pid
 
-# QUIC/UDP listener. The container binds the unprivileged port 8443 (the image
-# runs as a non-root user); map the host's public port to it (see compose.yaml).
-EXPOSE 8443/udp
+# QUIC/UDP and TLS/TCP listeners. The container binds the unprivileged port 8443
+# (the image runs as a non-root user); map the host's public ports to it (see
+# compose.yaml): both the UDP and TCP transports are served on the same port.
+EXPOSE 8443/udp 8443/tcp
 
 USER hsync
 

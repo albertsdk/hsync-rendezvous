@@ -11,7 +11,6 @@ peer-related is ever written to disk.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import errno
 import ipaddress
 import os
@@ -29,6 +28,7 @@ import typer
 from hsync_common import ssl_utils
 from hsync_common.constants import RDV_DEFAULT_PORT, RDV_PORT_SET
 from hsync_common.endpoint import parse_host_port, parse_port_list
+from hsync_common.fs import atomic_write_text
 from hsync_common.path_validation import is_valid_bucket_name
 from hsync_common.protocol.rdv_tokens import MIN_GROUP_KEY_CHARS, validate_group_key
 from hsync_common.protocol.rest import REST_METRICS_PATH
@@ -53,6 +53,7 @@ from hsync_rendezvous.server import (
     rotate_identity,
     rotation_hint,
     start_servers,
+    start_tcp_servers,
 )
 from hsync_rendezvous.stats import NodeStats
 from hsync_rendezvous.systemd import (
@@ -90,6 +91,11 @@ _DEFAULT_DEBUG_ENV = "HSYNC_RENDEZVOUS_DEBUG"
 _DEFAULT_READY_FILE_ENV = "HSYNC_RENDEZVOUS_READY_FILE"
 # Node-wide private mode: require a valid bucket_token on every frame.
 _DEFAULT_PRIVATE_ENV = "HSYNC_RENDEZVOUS_PRIVATE"
+# Per-transport listener switches (both on by default): the node serves the same
+# ``rdv/1`` sessions over QUIC/UDP and TLS/TCP on the same ports. Env forms let a
+# service manager or container pick one without a flag.
+_DEFAULT_UDP_ENV = "HSYNC_RENDEZVOUS_UDP"
+_DEFAULT_TCP_ENV = "HSYNC_RENDEZVOUS_TCP"
 # Data relay (on by default). One switch plus the bounds that keep a public
 # node from becoming a free CDN: idle timeout, per-session byte cap and global
 # byte rate.
@@ -461,9 +467,33 @@ def run(
             "reach the node under a name that is not the bind address (repeatable)."
         ),
     ),
+    udp: bool = typer.Option(
+        True,
+        "--udp/--no-udp",
+        envvar=_DEFAULT_UDP_ENV,
+        help=(
+            "Serve the QUIC/UDP listener (on by default; disable with --no-udp). "
+            "Env: HSYNC_RENDEZVOUS_UDP=0."
+        ),
+    ),
+    tcp: bool = typer.Option(
+        True,
+        "--tcp/--no-tcp",
+        envvar=_DEFAULT_TCP_ENV,
+        help=(
+            "Serve the TLS/TCP listener on the same ports (on by default; disable "
+            "with --no-tcp). Env: HSYNC_RENDEZVOUS_TCP=0."
+        ),
+    ),
 ) -> None:
-    """Run the rendezvous node: one or more QUIC/UDP listeners (rdv/1)."""
+    """Run the rendezvous node: one or more listeners per transport (rdv/1)."""
     resolved_host, resolved_ports = _resolve_listeners(listen_host, listen_port, listen_ports)
+    if not udp and not tcp:
+        _config_error(
+            RendezvousConfigError(
+                "--no-udp and --no-tcp are mutually exclusive: enable at least one transport"
+            )
+        )
     limits = ResourceLimits.detect()
     # One aggregate counter object per process: the handler, the connection guard
     # and every sink (STATUS=, stats file, /metrics) share it.
@@ -526,10 +556,13 @@ def run(
         if len(resolved_ports) == 1
         else ""
     )
+    transport_label = "+".join(
+        name for name, enabled in (("QUIC/UDP", udp), ("TLS/TCP", tcp)) if enabled
+    )
     banner = (
         f"hsync-rendezvous {__version__} — rdv/1, no-log, in-memory\n"
         f"  listener : {resolved_host}:{','.join(map(str, resolved_ports))} "
-        f"(QUIC/UDP, TLS 1.3, RETRY+address-validation){multi_hint}\n"
+        f"({transport_label}, TLS 1.3){multi_hint}\n"
         f"{identity_line}\n"
         f"  protected buckets: {', '.join(protected_bucket) or '(none)'}\n"
         f"  mode      : {'private (every frame needs a bucket_token)' if private else 'open'}\n"
@@ -570,6 +603,8 @@ def run(
                 metrics=metrics_endpoint,
                 stats_file=stats_file,
                 stats_interval=float(stats_interval),
+                udp=udp,
+                tcp=tcp,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -702,6 +737,23 @@ def _errno_from(exc: BaseException) -> int | None:
     return None
 
 
+def _warn_bind_failures(failures: list[tuple[int, BaseException]], *, proto: str) -> None:
+    """Warn (always-on, peer-free) about requested ports a transport could not bind.
+
+    Best-effort binding: a port held by another process (e.g. TCP 443 by a
+    co-hosted HTTPS server, or UDP 53 by a local resolver) is skipped so the node
+    still serves on the ports that are free.
+    """
+    for failed_port, failure in failures:
+        errno_value = _errno_from(failure)
+        warn_event(
+            "listener port unavailable",
+            port=failed_port,
+            proto=proto,
+            reason=os.strerror(errno_value) if errno_value is not None else "bind failed",
+        )
+
+
 def _bind_error_message(exc: BindError) -> str:
     """Actionable stderr message for a failed endpoint bind (exit code 3)."""
     target = f"{exc.host}:{exc.port}"
@@ -768,6 +820,8 @@ async def _async_main(
     metrics: MetricsEndpoint | None = None,
     stats_file: str | None = None,
     stats_interval: float = 15.0,
+    udp: bool = True,
+    tcp: bool = True,
 ) -> None:
     # The handler owns the aggregate counters; the guard and the exposition share
     # that instance so every sink reports the same numbers.
@@ -786,39 +840,77 @@ async def _async_main(
         if enforce_rate_limits
         else None
     )
-    try:
-        servers, bound_ports, identity, failures = await start_servers(
-            host,
-            ports,
-            handler,
-            retry=True,
-            identity=identity,
-            connection_guard=connection_guard,
-        )
-    except OSError as exc:
-        raise BindError(
-            host,
-            ports[0],
-            _errno_from(exc),
-            what="the QUIC/UDP listener",
-            port_flag="--listen-port <PORT>",
-            port_example="--listen-port 8443",
-            bind_advice="Check --listen-host/--listen-port; ports below 1024 need root "
-            "or CAP_NET_BIND_SERVICE.",
-        ) from exc
-    # Best-effort: a requested port that could not bind (address in use, e.g. 53
-    # held by the local resolver) is skipped with an always-on, peer-free warning
-    # instead of failing the whole node.
-    for failed_port, failure in failures:
-        errno_value = _errno_from(failure)
-        warn_event(
-            "listener port unavailable",
-            port=failed_port,
-            reason=os.strerror(errno_value) if errno_value is not None else "bind failed",
-        )
-    bound_display = ",".join(str(p) for p in bound_ports)
-    typer.echo(f"  running   : {host}:{bound_display} — cert fingerprint {identity.fingerprint}")
-    debug_log(f"listeners bound {host}:{bound_display} (retry+address-validation)")
+    servers: list[Any] = []
+    bound_ports: list[int] = []
+    resolved_identity = identity
+    bind_errors: list[BindError] = []
+    if udp:
+        try:
+            udp_servers, udp_ports, resolved_identity, failures = await start_servers(
+                host,
+                ports,
+                handler,
+                retry=True,
+                identity=resolved_identity,
+                connection_guard=connection_guard,
+            )
+        except OSError as exc:
+            bind_errors.append(
+                BindError(
+                    host,
+                    ports[0],
+                    _errno_from(exc),
+                    what="the QUIC/UDP listener",
+                    port_flag="--listen-port <PORT>",
+                    port_example="--listen-port 8443",
+                    bind_advice="Check --listen-host/--listen-port; ports below 1024 need "
+                    "root or CAP_NET_BIND_SERVICE.",
+                )
+            )
+        else:
+            # Best-effort: a requested port that could not bind (address in use,
+            # e.g. 53 held by the local resolver) is skipped with an always-on,
+            # peer-free warning instead of failing the whole node.
+            _warn_bind_failures(failures, proto="udp")
+            servers.extend(udp_servers)
+            bound_ports.extend(udp_ports)
+    if tcp:
+        try:
+            tcp_servers, tcp_ports, resolved_identity, failures = await start_tcp_servers(
+                host,
+                ports,
+                handler,
+                identity=resolved_identity,
+                connection_guard=connection_guard,
+            )
+        except OSError as exc:
+            bind_errors.append(
+                BindError(
+                    host,
+                    ports[0],
+                    _errno_from(exc),
+                    what="the TLS/TCP listener",
+                    port_flag="--listen-port <PORT>",
+                    port_example="--listen-port 8443",
+                    bind_advice="Check --listen-host/--listen-port; ports below 1024 need "
+                    "root or CAP_NET_BIND_SERVICE. TCP 443 may already be held by a "
+                    "co-hosted HTTPS server — run the node QUIC-only with --no-tcp.",
+                )
+            )
+        else:
+            _warn_bind_failures(failures, proto="tcp")
+            servers.extend(tcp_servers)
+            bound_ports.extend(tcp_ports)
+    if not servers:
+        # Nothing bound on any enabled transport: fail exactly as the
+        # single-transport node did (exit 3), naming the transport that failed.
+        raise bind_errors[0]
+    assert resolved_identity is not None  # a bound listener always resolved one
+    bound_display = ",".join(str(p) for p in dict.fromkeys(bound_ports))
+    typer.echo(
+        f"  running   : {host}:{bound_display} — cert fingerprint {resolved_identity.fingerprint}"
+    )
+    debug_log(f"listeners bound {host}:{bound_display}")
 
     tasks: list[asyncio.Task] = []
     upnp_managers: list[UpnpManager] = []
@@ -859,12 +951,16 @@ async def _async_main(
         if watchdog is not None:
             tasks.append(asyncio.create_task(_watchdog_loop(watchdog)))
         if upnp:
-            # One mapping per bound port: every offered door must also be mapped
-            # on the router, not just the first. A client may reach the node on
-            # any of them (e.g. 53 when its egress firewall blocks UDP 443), so a
-            # single mapping would leave the extra doors unreachable from the WAN.
-            for port in bound_ports:
-                manager = UpnpManager(port)
+            # One mapping per (bound port, enabled transport): every offered door
+            # must also be mapped on the router, not just the first. A client may
+            # reach the node on any of them (e.g. 53 when its egress firewall
+            # blocks UDP 443), so a single mapping would leave the extra doors
+            # unreachable from the WAN. A disabled transport is never mapped.
+            mapping_protocols = tuple(
+                name for name, enabled in (("UDP", udp), ("TCP", tcp)) if enabled
+            )
+            for port in dict.fromkeys(bound_ports):
+                manager = UpnpManager(port, protocols=mapping_protocols)
                 upnp_managers.append(manager)
                 tasks.append(asyncio.create_task(manager.run()))
 
@@ -953,21 +1049,10 @@ async def _watchdog_loop(interval: float) -> None:
 def _write_stats_file(path: str, body: str) -> None:
     """Replace the stats file atomically so a scraper never reads a partial file.
 
-    ``O_NOFOLLOW`` on the temporary name keeps a symlink planted in the directory
-    from redirecting the write, and ``os.replace`` leaves the reader with either
-    the previous snapshot or the new one.
+    Delegates to the shared writer: a fixed temp name opened with ``O_NOFOLLOW``
+    (a planted symlink cannot redirect the write) then ``os.replace``.
     """
-    temporary = f"{path}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(temporary, flags, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(body)
-        os.replace(temporary, path)
-    except OSError:
-        with contextlib.suppress(OSError):
-            os.unlink(temporary)
-        raise
+    atomic_write_text(path, body, mode=0o644, unique_temp=False, nofollow=True)
 
 
 async def _stats_loop(stats: NodeStats, stats_file: str | None, interval: float) -> None:

@@ -82,12 +82,22 @@ class PeerRecord:
         self.expires_at = time.monotonic() + ttl
 
     @classmethod
-    def from_register(cls, model: RdvRegister, *, peer_ip: str, peer_port: int) -> PeerRecord:
+    def from_register(
+        cls,
+        model: RdvRegister,
+        *,
+        peer_ip: str,
+        peer_port: int,
+        proto: BucketProto = "udp",
+    ) -> PeerRecord:
         """Build a record from a validated ``register`` frame.
 
         The observed source (``peer_ip``/``peer_port``) is the STUN-echo endpoint;
         every other field is relayed verbatim from the frame (or its documented
-        default). One projector keeps ``register`` handling in sync with the model.
+        default). ``proto`` is the transport the frame arrived on (``udp`` for
+        QUIC, ``tcp`` for TLS/TCP): it is the protocol of the observed-source
+        fallback endpoint an endpoint-less ``register`` is answered with. One
+        projector keeps ``register`` handling in sync with the model.
         """
         return cls(
             cid=model.cid,
@@ -95,7 +105,7 @@ class PeerRecord:
             group=model.group,
             ip=peer_ip,
             port=peer_port,
-            proto="udp",
+            proto=proto,
             cert_fp=model.cert_fp,
             version=model.version,
             endpoints=tuple((e.proto, e.host, e.port) for e in model.endpoints),

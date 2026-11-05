@@ -100,8 +100,8 @@ async def test_concurrent_connections_raise_the_connection_peak(
         # Then: the live level and the peak both see the three connections
         status, body = await asyncio.to_thread(_scrape, metrics_port, TOKEN)
         assert status == 200
-        assert _value(body, "hsync_rendezvous_quic_connections_current") >= 3
-        assert _value(body, "hsync_rendezvous_quic_connections_peak") >= 3
+        assert _value(body, 'hsync_rendezvous_connections_current{transport="quic"}') >= 3
+        assert _value(body, 'hsync_rendezvous_connections_peak{transport="quic"}') >= 3
 
 
 @pytest.mark.asyncio

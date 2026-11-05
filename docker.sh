@@ -18,11 +18,11 @@ readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly IMAGE_NAME="hsync-rendezvous"
 readonly IMAGE_TAG="${HSYNC_VERSION:-1.0.0}"
 readonly CONTAINER_NAME="hsync-rendezvous"
-# The container always binds this unprivileged UDP port (the image runs as a
-# non-root user); the host's public QUIC port is mapped to it.
+# The container always binds this unprivileged port (the image runs as a
+# non-root user); the host's public QUIC and TLS/TCP ports are mapped to it.
 readonly CONTAINER_PORT="8443"
-# Host UDP port clients connect to.
-RENDEZVOUS_HOST_UDP_PORT="${RENDEZVOUS_HOST_UDP_PORT:-443}"
+# Host port clients connect to (UDP and TCP).
+RENDEZVOUS_HOST_PORT="${RENDEZVOUS_HOST_PORT:-443}"
 # Host directory holding the persistent TLS identity and the readiness PID.
 _DATA_DIR_RAW="${HSYNC_RENDEZVOUS_DATA_DIR:-${SCRIPT_DIR}/hsync-data}"
 if [[ "${_DATA_DIR_RAW}" = /* ]]; then
@@ -82,7 +82,7 @@ ${BOLD}Options:${RESET}
     -h, --help      Show this help message
 
 ${BOLD}Environment Variables:${RESET}
-    RENDEZVOUS_HOST_UDP_PORT          Host UDP port clients connect to (default: 443)
+    RENDEZVOUS_HOST_PORT             Host UDP/TCP port clients connect to (default: 443)
     HSYNC_RENDEZVOUS_PRIVATE       Set to 1 for a private node (every frame needs a token)
     HSYNC_RENDEZVOUS_KEYS_PATH     Host path of the group-keys file (mounted at /keys, opened as fd 3)
     HSYNC_RENDEZVOUS_DEBUG         Set to 1 for the full operation log (peer identity included)
@@ -95,8 +95,8 @@ ${BOLD}Examples:${RESET}
     HSYNC_RENDEZVOUS_PRIVATE=1 HSYNC_RENDEZVOUS_KEYS_PATH=./group-keys ./docker.sh start
     ./docker.sh logs -f
 
-The container binds UDP ${CONTAINER_PORT} internally; the host maps
-RENDEZVOUS_HOST_UDP_PORT to it. The persistent TLS identity lives on the host under
+The container binds ${CONTAINER_PORT} internally (UDP and TCP); the host maps
+RENDEZVOUS_HOST_PORT to it. The persistent TLS identity lives on the host under
 ${DATA_DIR}; back it up to keep the certificate fingerprint stable across hosts.
 EOF
 }
@@ -141,7 +141,8 @@ cmd_start() {
         --restart unless-stopped
         --read-only
         --tmpfs /tmp
-        -p "${RENDEZVOUS_HOST_UDP_PORT}:${CONTAINER_PORT}/udp"
+        -p "${RENDEZVOUS_HOST_PORT}:${CONTAINER_PORT}/udp"
+        -p "${RENDEZVOUS_HOST_PORT}:${CONTAINER_PORT}/tcp"
         # Run under the invoking user's ids so the bind-mounted identity
         # directory stays writable (created above as the same user).
         --user "${HSYNC_UID:-$(id -u)}:${HSYNC_GID:-$(id -g)}"
@@ -169,7 +170,7 @@ cmd_start() {
     docker "${docker_args[@]}" "${IMAGE_NAME}:${IMAGE_TAG}" \
         run --listen-host 0.0.0.0 --listen-port "${CONTAINER_PORT}"
 
-    log_info "Host port: ${RENDEZVOUS_HOST_UDP_PORT}/udp → container ${CONTAINER_PORT}/udp"
+    log_info "Host port: ${RENDEZVOUS_HOST_PORT}/udp+tcp → container ${CONTAINER_PORT}"
     log_info "Identity:  ${DATA_DIR}"
 
     if [[ "${STARTUP_READY_TIMEOUT}" =~ ^[0-9]+$ ]] && (( STARTUP_READY_TIMEOUT > 0 )); then
@@ -180,7 +181,7 @@ cmd_start() {
             docker logs --tail 30 "${CONTAINER_NAME}" >&2 || true
             exit 1
         fi
-        log_ok "HSYNC rendezvous is live → udp/${RENDEZVOUS_HOST_UDP_PORT}"
+        log_ok "HSYNC rendezvous is live → udp+tcp/${RENDEZVOUS_HOST_PORT}"
     else
         log_info "Readiness check skipped (HSYNC_RENDEZVOUS_STARTUP_TIMEOUT=0)"
     fi

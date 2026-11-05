@@ -7,8 +7,9 @@
 **HSYNC Rendezvous** is the optional rendezvous node that lets HSYNC peers find
 each other over the Internet when they are **not** on the same local network. It
 is a stateless, no-log meeting point: it tells P2P clients which peers are
-online without ever storing anything, speaking the `rdv/1` protocol over QUIC
-(UDP port 443). Think of it as an **address book, not a post office**: it helps
+online without ever storing anything, speaking the `rdv/1` protocol over two
+interchangeable transports — QUIC/UDP and TLS/TCP (port 443 by default on both).
+Think of it as an **address book, not a post office**: it helps
 your devices find each other. File data normally flows directly between peers;
 two that no NAT mapping can reach fall back to relaying their encrypted traffic
 through the node (see [Usage](docs/usage.md)).

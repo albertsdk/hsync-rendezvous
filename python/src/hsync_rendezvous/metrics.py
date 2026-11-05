@@ -24,7 +24,7 @@ import hmac
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from hsync_common.protocol.rest import REST_METRICS_PATH
+from hsync_common.protocol.rest import PROMETHEUS_CONTENT_TYPE, REST_METRICS_PATH
 from hsync_common.ratelimit import TokenBucketLimiter
 from pydantic import SecretStr
 
@@ -36,8 +36,6 @@ __all__ = [
     "MetricsServer",
 ]
 
-# Prometheus text exposition: the same content type hsync-server returns.
-PROMETHEUS_CONTENT_TYPE = "text/plain; version=1.0.0; charset=utf-8"
 _ERROR_CONTENT_TYPE = "text/plain; charset=utf-8"
 
 # One request per connection, one bounded header block, a short read timeout: the

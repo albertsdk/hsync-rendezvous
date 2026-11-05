@@ -11,7 +11,7 @@ surface:
 
 - the CLI (`run`, `--version`, `--private`, fail-fast exit codes — 2 config
   error, 3 listener bind failure);
-- the `rdv/1` wire protocol over QUIC/UDP (`hsync-rdv/1` ALPN, NDJSON frames).
+- the `rdv/1` wire protocol over QUIC/UDP and TLS/TCP (`hsync-rdv/1` ALPN, NDJSON frames).
 
 They never import `hsync_rendezvous` or touch internal state. If the whole
 implementation were rewritten while keeping the same CLI + wire contract, the
@@ -97,7 +97,7 @@ HSYNC_BB_RENDEZVOUS=1 HSYNC_RENDEZVOUS_BIN=/path/to/hsync-rendezvous \
 ## Readiness and isolation
 
 - Readiness is signalled through the `HSYNC_RENDEZVOUS_READY_FILE` seam: the
-  process writes its PID there once the QUIC listener is bound, and removes it
+  process writes its PID there once a listener is bound, and removes it
   on graceful shutdown (`SIGTERM`). The suite keys readiness on the file
   **appearing with a PID**, not on that PID equalling the launcher's: a
   onefile-packaged binary (PyInstaller, the `.deb` payload) runs the app in a

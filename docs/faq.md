@@ -155,10 +155,15 @@ ones keep working.
 
 ## Some clients cannot reach my node even though it is up
 
-If only *some* clients fail while others work, the node is reachable but
-those clients' network **blocks outbound UDP 443**. Give them another door by
-listening on a second inbound port — 443 **and** 53, sharing one routing
-table, with both open in the host firewall:
+The node serves **two interchangeable transports on the same port**: QUIC/UDP
+(primary) and TLS/TCP, for a client network whose egress blocks UDP. `hsync-client`
+races both (default `auto`) and remembers the winner, so a client that blocks
+outbound UDP 443 still reaches the node over TLS/TCP 443 with no node change.
+
+If *only some* clients fail while others work, their network may also block the
+inbound port from the client side; give them another door by listening on a
+second port — 443 **and** 53, sharing one routing table, with both open in the
+host firewall:
 
 ```bash
 hsync-rendezvous run --listen-ports 443,53
@@ -167,6 +172,19 @@ hsync-rendezvous run --listen-ports 443,53
 With a packaged install, set the same option through a unit/Compose override
 (see the Debian, Windows or Docker guide); for the full semantics see
 `--listen-ports` in [usage.md](usage.md#run-options).
+
+## Does the node speak TCP, or only QUIC?
+
+Both. Every node serves `rdv/1` over **QUIC/UDP and TLS/TCP on the same port(s)**
+with the same self-signed TLS 1.3 identity and ALPN `hsync-rdv/1`; the client's
+default `auto` transport races the two per endpoint (QUIC preferred) and pins the
+winner. A node started with `--no-udp` is TLS/TCP-only, `--no-tcp` is QUIC-only,
+and disabling both is a configuration error (exit 2). The same switches exist as
+`HSYNC_RENDEZVOUS_UDP`/`HSYNC_RENDEZVOUS_TCP` (`1`/`0`) for the service units.
+Clients select the transport themselves with `--rendezvous-transport auto|quic|tcp`
+(env `HSYNC_RENDEZVOUS_TRANSPORT`). `--upnp` maps only the enabled transports.
+See the wire contract in [`protocol-spec/rdv-1.md`](../protocol-spec/rdv-1.md)
+(§Transport).
 
 ## Peers discover each other but never sync (mobile data, hotspot, CGNAT)
 

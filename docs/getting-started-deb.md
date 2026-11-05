@@ -1,7 +1,7 @@
 # Getting Started — Method 3: Debian/Ubuntu package
 
 The `.deb` installs the node as a hardened systemd service under a dynamic user
-with `CAP_NET_BIND_SERVICE` (so it can bind UDP 443), and provisions group keys
+with `CAP_NET_BIND_SERVICE` (so it can bind port 443 on UDP and TCP), and provisions group keys
 as a systemd credential. No Docker and no Python are required.
 
 > The packages are built on Debian 12 (base glibc 2.36); the produced package
@@ -11,7 +11,7 @@ as a systemd credential. No Docker and no Python are required.
 
 - <img src="assets/os/debian.svg" alt="Debian" width="16" height="16"> <img src="assets/os/ubuntu.svg" alt="Ubuntu" width="16" height="16"> Debian or Ubuntu, `amd64`, `arm64` or `armhf`
 - A root shell or `sudo`
-- A UDP port reachable from the Internet (443 by default)
+- A port reachable from the Internet (443 by default) over UDP and/or TCP — QUIC uses UDP, TLS/TCP uses TCP
 
 ## Install
 
@@ -110,11 +110,12 @@ sudo systemctl enable --now hsync-rendezvous.service
 sudo systemctl status hsync-rendezvous.service
 ```
 
-## Optional: serve a second UDP port
+## Optional: serve a second port
 
-If some clients' networks block UDP 443, the node can also listen on 53: the
+If some clients' networks block port 443 on one transport, the node can also listen on 53: the
 two ports share one routing table, so a peer registered on one is visible to a
-query on the other. The packaged unit pins a single port, so override its
+query on the other. Both QUIC/UDP and TLS/TCP are served on each port. The
+packaged unit pins a single port, so override its
 command with a drop-in:
 
 ```bash
@@ -132,7 +133,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart hsync-rendezvous.service
 ```
 
-Open UDP 53 in the host firewall too, and free that port if the local resolver
+Open port 53 (UDP and TCP) in the host firewall too, and free that port if the local resolver
 already holds it. If you provisioned group keys, this override **loses** the
 unit's automatic `--keys-fd`: keep `LoadCredential=` and append
 `--keys-fd 5 5<"$CREDENTIALS_DIRECTORY/group-keys"` to the command (as in the

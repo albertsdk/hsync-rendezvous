@@ -366,14 +366,18 @@ def _combined(result) -> str:
 
 
 def _patch_run_no_side_effects(monkeypatch, start_servers) -> None:
-    """Stub the listener start and the loop/shutdown seams.
+    """Stub both listener starts and the loop/shutdown seams.
 
     ``run`` resolves the loop runner (``_uvloop_runner``; the stdlib loop keeps
     the test process free of a global event-loop policy swap) and installs the
     shutdown-signal handlers before the bind; stubbing them keeps the tests
-    deterministic.
+    deterministic. The node starts the QUIC/UDP and TLS/TCP transports through
+    two seams (``start_servers`` and ``start_tcp_servers``); both are stubbed
+    with the same fake, which returns the identical ``(servers, ports,
+    identity, failures)`` shape.
     """
     monkeypatch.setattr("hsync_rendezvous.cli.start_servers", start_servers)
+    monkeypatch.setattr("hsync_rendezvous.cli.start_tcp_servers", start_servers)
     monkeypatch.setattr("hsync_rendezvous.cli._uvloop_runner", lambda: None)
     monkeypatch.setattr("hsync_rendezvous.cli._install_shutdown_handlers", lambda: None)
 

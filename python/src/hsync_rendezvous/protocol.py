@@ -19,10 +19,11 @@ from typing import Annotated, Literal
 # ``hsync_rendezvous.protocol``. The ``rdv/1`` spec documents the same value;
 # ``test_cid_pattern_matches_boot1_spec`` pins the two together.
 from hsync_common.endpoint import is_valid_endpoint_host
-from hsync_common.models.event import CID_PATTERN
+from hsync_common.ids import CID_PATTERN
 from hsync_common.path_validation import is_valid_bucket_name
 from hsync_common.protocol.pairing import parse_fingerprint
 from hsync_common.protocol.rdv_tokens import BUCKET_TOKEN_LEN, is_valid_bucket_token
+from hsync_common.protocol.rendezvous import PROTOCOL_VERSION_RDV as PROTOCOL_VERSION_RDV
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter
 
 __all__ = [
@@ -64,9 +65,10 @@ __all__ = [
     "SyncDirection",
 ]
 
-# Per-channel protocol version. Bump the suffix on any breaking change to the
-# rendezvous channel's wire shape; peers then hard-fail instead of drifting.
-PROTOCOL_VERSION_RDV: Literal["rdv/1"] = "rdv/1"
+# Per-channel protocol version is the hsync-common SSOT
+# (``hsync_common.protocol.rendezvous.PROTOCOL_VERSION_RDV``): bump the suffix
+# there on any breaking change so both peers hard-fail instead of drifting.
+# Re-exported here for the daemon (``hsync_rendezvous.stats``).
 
 # hex(32 bytes) = 64 chars. Absent = open bucket. The token grammar and the
 # derivation live in the shared, protocol-neutral

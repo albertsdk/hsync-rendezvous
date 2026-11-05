@@ -175,14 +175,23 @@ def test_ready_file_failure_exits_4_without_a_traceback(tmp_path) -> None:
 
 
 def test_port_in_use_fails_fast_with_actionable_error() -> None:
-    """A bind failure reports exit code 3 + an actionable message, no traceback."""
+    """A bind failure on every transport reports exit code 3 + an actionable message.
+
+    The node serves QUIC/UDP and TLS/TCP by default, so a port is only truly
+    unavailable when *both* a UDP and a TCP socket hold it; a single-transport
+    conflict is skipped best-effort (the other transport still binds), so the
+    scenario needs both holders to reproduce the exit-3 fast failure.
+    """
     import socket
 
-    # Given: a UDP socket already bound to a loopback port
-    holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # Given: a UDP and a TCP socket already bound to the same loopback port
+    udp_holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tcp_holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        holder.bind(("127.0.0.1", 0))
-        port = int(holder.getsockname()[1])
+        tcp_holder.bind(("127.0.0.1", 0))
+        tcp_holder.listen()
+        port = int(tcp_holder.getsockname()[1])
+        udp_holder.bind(("127.0.0.1", port))
 
         # Guard: if the OS lets a second plain bind succeed (SO_REUSEPORT
         # defaults), the node would start and this scenario cannot be reproduced.
@@ -195,7 +204,7 @@ def test_port_in_use_fails_fast_with_actionable_error() -> None:
             probe.close()
             pytest.skip("UDP SO_REUSEPORT allows a second bind; cannot reproduce")
 
-        # When: the node tries to bind the same port
+        # When: the node tries to bind the same port on both transports
         result = run_cli(["run", "--listen-host", "127.0.0.1", "--listen-port", str(port)])
         # Then: exit 3 with an actionable, traceback-free message
         assert result.returncode == 3
@@ -203,7 +212,8 @@ def test_port_in_use_fails_fast_with_actionable_error() -> None:
         assert "already in use" in result.stderr
         assert "Traceback" not in result.stderr
     finally:
-        holder.close()
+        udp_holder.close()
+        tcp_holder.close()
 
 
 @pytest.mark.asyncio

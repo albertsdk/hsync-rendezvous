@@ -8,7 +8,7 @@ and registers it as the Windows service **`hsync-rendezvous`** through
 
 - <img src="assets/os/windows.svg" alt="Windows" width="16" height="16"> Windows 10/11 or Windows Server (x64)
 - Administrator rights
-- A UDP port reachable from the Internet (443 by default)
+- A port reachable from the Internet (443 by default) over UDP and/or TCP — QUIC uses UDP, TLS/TCP uses TCP
 
 ## Install
 
@@ -61,8 +61,8 @@ Restart-Service hsync-rendezvous
   startup and never writes it.
 - Read the fingerprint clients pin with
   `hsync-rendezvous identity show --identity C:\ProgramData\hsync-rendezvous\identity.pem`.
-- To serve a **second** inbound UDP port (for clients whose network blocks UDP
-  443), add `--listen-ports 443,53` to the service `<arguments>` in the XML above and
+- To serve a **second** inbound port (for clients whose network blocks 443 on
+  one transport), add `--listen-ports 443,53` to the service `<arguments>` in the XML above and
   open the extra port — see `--listen-ports` in
   [Usage](../docs/usage.md#run-options).
 

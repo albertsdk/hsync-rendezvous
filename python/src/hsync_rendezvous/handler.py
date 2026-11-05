@@ -29,6 +29,7 @@ from hsync_rendezvous.protocol import (
     RDV_FRAME_ADAPTER,
     RDV_PEER_ADAPTER,
     RDV_RELAY_ERROR_ADAPTER,
+    BucketProto,
     Endpoint,
     RdvError,
     RdvFrame,
@@ -279,13 +280,16 @@ class RendezvousHandler:
         *,
         peer_ip: str,
         peer_port: int,
+        proto: BucketProto = "udp",
     ) -> bytes | None | RelayHandoff:
         """Process one raw NDJSON frame; return the reply, a relay handoff or ``None``.
 
         Malformed / unknown frames are silently dropped (no-log, no oracle). A
         relay frame returns a :class:`RelayHandoff` instead of bytes: its work
         needs the connection's streams, which this transport-agnostic core does
-        not own.
+        not own. ``proto`` is the transport the frame arrived on (``udp`` for
+        QUIC, ``tcp`` for TLS/TCP); it only tags the STUN-echo ``ack`` and the
+        observed-source fallback endpoint of an endpoint-less ``register``.
         """
         frame = self._parse_frame(raw, peer_ip=peer_ip, peer_port=peer_port)
         if frame is None:
@@ -314,7 +318,7 @@ class RendezvousHandler:
                 bucket=getattr(frame, "bucket", None),
                 group=getattr(frame, "group", None),
             )
-        return self._dispatch(frame, peer_ip, peer_port)
+        return self._dispatch(frame, peer_ip, peer_port, proto)
 
     def _parse_frame(
         self,
@@ -351,14 +355,14 @@ class RendezvousHandler:
             return None
 
     def _dispatch(
-        self, frame: RdvFrame, peer_ip: str, peer_port: int
+        self, frame: RdvFrame, peer_ip: str, peer_port: int, proto: BucketProto = "udp"
     ) -> bytes | None | RelayHandoff:
         """Route a validated frame to its handler (``leave``/``ping`` produce no reply)."""
         match frame:
             case RdvRegister():
-                return self._register(frame, peer_ip, peer_port)
+                return self._register(frame, peer_ip, peer_port, proto)
             case RdvRefresh():
-                return self._refresh(frame, peer_ip, peer_port)
+                return self._refresh(frame, peer_ip, peer_port, proto)
             case RdvLeave():
                 self._leave(frame, peer_ip)
                 return None
@@ -463,7 +467,9 @@ class RendezvousHandler:
 
     # ------------------------------------------------------------- register
 
-    def _register(self, model: RdvRegister, peer_ip: str, peer_port: int) -> bytes | None:
+    def _register(
+        self, model: RdvRegister, peer_ip: str, peer_port: int, proto: BucketProto = "udp"
+    ) -> bytes | None:
         refused = self._admit(
             "register",
             self._register_pair,
@@ -488,7 +494,7 @@ class RendezvousHandler:
                 )
             return None
 
-        record = PeerRecord.from_register(model, peer_ip=peer_ip, peer_port=peer_port)
+        record = PeerRecord.from_register(model, peer_ip=peer_ip, peer_port=peer_port, proto=proto)
         record.touch(self.ttl)
         if not self.routing.upsert(record):
             # Bounded table: reclaim expired entries once, then signal
@@ -522,9 +528,11 @@ class RendezvousHandler:
                 connected=record.connected,
                 ttl=int(self.ttl),
             )
-        return self._ack(peer_ip, peer_port)
+        return self._ack(peer_ip, peer_port, proto=proto)
 
-    def _refresh(self, model: RdvRefresh, peer_ip: str, peer_port: int) -> bytes | None:
+    def _refresh(
+        self, model: RdvRefresh, peer_ip: str, peer_port: int, proto: BucketProto = "udp"
+    ) -> bytes | None:
         refused = self._admit(
             "refresh",
             self._register_pair,
@@ -575,7 +583,7 @@ class RendezvousHandler:
                 peer=f"{peer_ip}:{peer_port}",
                 connected=record.connected,
             )
-        return self._ack(peer_ip, peer_port)
+        return self._ack(peer_ip, peer_port, proto=proto)
 
     def _may_replace(self, cid: str, bucket: str, group: str | None, peer_ip: str) -> bool:
         """Whether ``peer_ip`` may create/replace the ``(cid, bucket, group)`` record.
@@ -856,16 +864,20 @@ class RendezvousHandler:
             + b"}"
         )
 
-    def _ack(self, peer_ip: str, peer_port: int) -> bytes:
+    def _ack(self, peer_ip: str, peer_port: int, *, proto: BucketProto = "udp") -> bytes:
         # STUN-echo: reply with the source endpoint the datagrams actually
         # arrived from (observed port = the NAT-mapped public port, if any).
+        # ``proto`` is the transport the frame arrived on: the client uses the
+        # observed host (with its own p2p listen port) as a fallback candidate.
         # Hand-assembled like ``_response``: the envelope is server-controlled
         # and the observed ip/port come from the socket, so a pydantic round-trip
         # would only re-validate already-trusted values. Byte-identical to the
         # model dump — pinned by ``test_ack_bytes_match_the_pydantic_serializer``.
         return (
             b'{"protocol_version":"rdv/1","type":"ack","observed_endpoint":'
-            b'{"proto":"udp","ip":"'
+            b'{"proto":"'
+            + proto.encode("ascii")
+            + b'","ip":"'
             + peer_ip.encode("ascii")
             + b'","port":'
             + str(peer_port).encode("ascii")

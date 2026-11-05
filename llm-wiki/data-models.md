@@ -58,7 +58,8 @@ identity by certificate pinning). Like `capacity`, a changed value requires a ne
 for a peer that advertised at least one listen endpoint (it can act as a data-plane
 server — a master **or** a read-only seeder). An endpoint-less register (the first
 STUN register) is advertised with `reachable=false` and a single-element
-`endpoints` list carrying its observed UDP source. `refresh` never changes it; a
+`endpoints` list carrying its observed source endpoint on the transport that
+delivered the register (`udp` or `tcp`). `refresh` never changes it; a
 change requires a new `register`.
 
 `RdvPeer.endpoints` relays the first `MAX_RELAY_ENDPOINTS` (four) advertised

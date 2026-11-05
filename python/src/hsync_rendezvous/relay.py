@@ -39,6 +39,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from hsync_common.ratelimit import TokenBucket
+
 from hsync_rendezvous.diagnostics import debug_event, debug_log
 from hsync_rendezvous.framing import FrameTooLarge, read_ndjson
 from hsync_rendezvous.protocol import (
@@ -146,25 +148,6 @@ class _Pending:
     last_activity: float = field(default_factory=time.monotonic)
 
 
-class _Bandwidth:
-    """Process-wide byte-rate shaper (token bucket, await-free fast path)."""
-
-    def __init__(self, bytes_per_second: int) -> None:
-        self._rate = float(bytes_per_second)
-        self._tokens = float(bytes_per_second)
-        self._stamp = time.monotonic()
-
-    def charge(self, size: int) -> float | None:
-        """Charge ``size`` bytes; ``None`` when they fit, else seconds to wait."""
-        now = time.monotonic()
-        self._tokens = min(self._rate, self._tokens + (now - self._stamp) * self._rate)
-        self._stamp = now
-        if self._tokens >= size:
-            self._tokens -= size
-            return None
-        return (size - self._tokens) / self._rate
-
-
 class PrefixedReader:
     """Reader that replays bytes the frame reader already buffered.
 
@@ -218,7 +201,17 @@ class RelayRegistry:
         self._sessions = 0
         self._per_ip: dict[str, int] = {}
         self._per_bucket: dict[str, int] = {}
-        self._bandwidth = _Bandwidth(quotas.bytes_per_second) if quotas.bytes_per_second else None
+        # Process-wide byte-rate shaper (shared token bucket): one second of
+        # bytes of burst, refilled at the configured rate.
+        self._bandwidth = (
+            TokenBucket(
+                capacity=float(quotas.bytes_per_second),
+                refill=float(quotas.bytes_per_second),
+                window=1.0,
+            )
+            if quotas.bytes_per_second
+            else None
+        )
 
     # -- introspection ---------------------------------------------------------
 
@@ -240,8 +233,17 @@ class RelayRegistry:
         reader: Any,
         writer: Any,
         peer_ip: str,
+        admission: Any | None = None,
     ) -> None:
-        """Take over one stream for the validated relay ``handoff``."""
+        """Take over one stream for the validated relay ``handoff``.
+
+        ``admission`` is the connection's transport admission handle when the
+        transport charges one (TLS/TCP): a matched ``relay_attach`` returns its
+        generic admission through it (:meth:`_attach`), so a TCP listener's
+        fan-out is bounded by the relay session quotas instead of the generic
+        per-IP connection/handshake budget. ``None`` on QUIC, where the attach
+        streams share the listener's one connection and are never charged.
+        """
         if not handoff.authorized:
             _close(writer)
             return
@@ -251,7 +253,9 @@ class RelayRegistry:
         elif isinstance(model, RdvRelayConnect):
             await self._connect(model, reader=reader, writer=writer, peer_ip=peer_ip)
         else:
-            await self._attach(model, reader=reader, writer=writer, peer_ip=peer_ip)
+            await self._attach(
+                model, reader=reader, writer=writer, peer_ip=peer_ip, admission=admission
+            )
 
     # -- listener --------------------------------------------------------------
 
@@ -382,6 +386,7 @@ class RelayRegistry:
         reader: Any,
         writer: Any,
         peer_ip: str,
+        admission: Any | None = None,
     ) -> None:
         """Hand a listener's fresh stream to the pending session it belongs to."""
         session = self._pending.get(model.relay_id)
@@ -394,6 +399,16 @@ class RelayRegistry:
         ):
             _close(writer)
             return
+        # The attach matched a pending session, so this connection is bounded by
+        # the relay session quotas that admitted it (global, per bucket, per
+        # dialer IP) — not by the generic per-IP connection/handshake budget. On
+        # TLS/TCP each attach is its own connection, so its generic admission is
+        # returned here; QUIC passes no handle (attaches share the listener's one
+        # connection and were never charged).
+        if admission is not None:
+            exempt = getattr(admission, "exempt", None)
+            if exempt is not None:
+                exempt()
         session.acceptor = (reader, writer)
         session.attached.set()
         try:

@@ -76,8 +76,8 @@ peer declares and never becomes an identity authority.
 
 ## Hardening Recommendations
 
-- Run the node on UDP/443 via the packaged service unit and keep dependencies
-  up to date. Install the container image through `install.sh` (or verify it
+- Run the node on port 443 over UDP and TCP (QUIC and TLS/TCP) via the packaged
+  service unit and keep dependencies up to date. Install the container image through `install.sh` (or verify it
   with `cosign verify` yourself) so an unverified image is never started.
 - If clients pin the fingerprint, keep the persistent identity (the default) or
   an explicit `--identity PATH`, and distribute the `sha256:<hex>` fingerprint

@@ -3,7 +3,8 @@
 `hsync-rendezvous` is the Internet rendezvous node of the HSYNC sync network: it
 tells P2P clients which peers are currently online, without storing anything.
 It runs a no-log, zero-knowledge rendezvous service speaking the `rdv/1` protocol
-over QUIC (UDP port 443): the routing table lives only in RAM, and the node's
+over two interchangeable transports — QUIC/UDP and TLS/TCP (port 443 by default):
+the routing table lives only in RAM, and the node's
 own TLS key is its only persistent artifact (an optional readiness PID file is
 written only when `--ready-file` is set).
 
@@ -30,12 +31,14 @@ no NAT mapping reaches can still run their data plane through it (disable with
 ## Requirements
 
 - <img src="assets/os/linux.svg" alt="Linux" width="16" height="16"> <img src="assets/os/apple.svg" alt="macOS" width="16" height="16"> <img src="assets/os/windows.svg" alt="Windows" width="16" height="16"> Linux, macOS or Windows, following the method's own prerequisites
-- UDP port 443 (or any other UDP port) reachable from the Internet — the 443
+- Port 443 (or any other port) reachable from the Internet over UDP and/or TCP —
+  the node serves QUIC/UDP and TLS/TCP on the same ports by default; the 443
   default is privileged: run as root, grant `CAP_NET_BIND_SERVICE` (the `.deb`
   and systemd unit do), or use a port ≥ 1024 (e.g. `--listen-port 8443`)
-- Optional: a UPnP-capable router for zero-touch UDP port mapping (opt in with `--upnp`)
-- Optional: a **second** inbound UDP port (e.g. 53) so clients whose network
-  blocks UDP 443 can still reach the node — see `--listen-ports` in
+- Optional: a UPnP-capable router for zero-touch port mapping on both transports
+  (opt in with `--upnp`)
+- Optional: a **second** inbound port (e.g. 53) so clients whose network blocks
+  443 on one transport can still reach the node — see `--listen-ports` in
   [usage.md](usage.md#run-options)
 
 Python 3.12–3.14 and Poetry are needed **only** for the

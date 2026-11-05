@@ -6,13 +6,29 @@
 
 ## Transport
 
-- QUIC/UDP, default port **443** (the shared `RDV_DEFAULT_PORT`; any UDP port is
-  selectable with `--listen-port`, and a recommended reachability set
-  (`RDV_PORT_SET`, 443 + 53) with `--listen-ports`). **One process, one
-  in-memory routing table, one or more UDP listeners** (multi-port; no TCP
-  fallback — zero legacy). Multiple listeners share the same routing table so a
-  peer registered via one port is visible to a query on another; state sharding
-  across processes is forbidden (it would break rendezvous).
+Two interchangeable transports carry the **same** `rdv/1` framing:
+
+- **QUIC/UDP** (primary): default port **443** (the shared `RDV_DEFAULT_PORT`),
+  with an optional multicasting RETRY + address-validation token.
+- **TLS/TCP** (equivalent alternative): the **same** ports and the same TLS 1.3
+  identity, for a client network whose egress blocks UDP. One TCP connection
+  carries one session (several frames may be pipelined on it: the server keeps
+  reading until the client's EOF, so the client opens and closes); a relay
+  `relay_attach` is a fresh connection, like every other session.
+
+Both transports are served on the same port (any port is selectable with
+`--listen-port`, and a recommended reachability set (`RDV_PORT_SET`, 443 + 53)
+with `--listen-ports`) and can be disabled per node (`--no-udp`/`--no-tcp`;
+disabling both is a configuration error). **One process, one in-memory routing
+table**: every listener — every port on either transport — shares the same table,
+so a peer registered via one port/transport is visible to a query on another;
+state sharding across processes is forbidden (it would break rendezvous).
+
+Transport choice is a **client policy**, not a wire property: `auto` races QUIC
+and TLS/TCP per endpoint (QUIC preferred) and memoizes the winner; `quic`/`tcp`
+use one transport only. The trust model is unchanged: one pin keyed by
+`(host, port)`, shared by both transports.
+
 - **Redundancy is client-side, never server-side**: the tables of two different
   nodes are independent and the protocol has no frame that copies one into the
   other. A client MAY therefore lease and query **several** independent nodes
@@ -23,21 +39,24 @@
   visible to a client that only reaches node B, and an implementation MUST NOT
   pretend otherwise (no re-publication of another peer's record, which would
   also break the source-IP ownership rule in §Auth).
-- TLS 1.3 inside QUIC: the exchanged peer list is not readable by ISPs.
-- ALPN `hsync-rdv/1`.
-- NDJSON payloads (one JSON object per line) over bidirectional QUIC streams;
-  a client may pipeline several frames back-to-back on one stream and the
-  server answers each frame in order.
+- TLS 1.3 on both transports: the exchanged peer list is not readable by ISPs.
+- ALPN `hsync-rdv/1` on both, enforced in both directions (a client offering no
+  ALPN or a different token is refused; Python's server-side ALPN does not abort
+  on a missing overlap, so the server closes such a connection explicitly).
+- NDJSON payloads (one JSON object per line) over a reliable ordered byte stream
+  (a QUIC bidirectional stream, or a TCP connection); a client may pipeline
+  several frames back-to-back and the server answers each frame in order.
 - **Every frame** carries the common header `{protocol_version, type, ...}`;
   the server routes on `type` and rejects anything else (rigid validator).
 
 ## Address validation
 
 - Server requires QUIC `RETRY` + `address_validation_token` before allocating connection state (anti-amplification).
+- On TLS/TCP the per-IP connection guard is charged in the accept callback **before the TLS handshake and before any byte is read**; a refused IP is aborted with no handshake work and zero bytes consumed, so the address-validation guarantee holds on both transports.
 - Per-IP token bucket: ~10 req/s (burst 50). Additional per-IP and per-`(IP, bucket)` limits in §Auth.
-- Connection guard: ~30 handshakes/s (burst 100) per IP, a per-IP cap and a process-wide cap on simultaneously-open connections, checked before any handshake work runs.
-- QUIC receive windows are bounded (≤32 KiB per stream, ≤128 KiB per connection) so a connection cannot buffer unbounded input.
-- Idle connections are dropped after 30 s.
+- Connection guard: ~30 handshakes/s (burst 100) per IP, a per-IP cap and a process-wide cap on simultaneously-open connections, checked before any handshake work runs. Counts are tracked per transport while the process-wide cap spans both; a TLS/TCP relay-attach connection whose `relay_attach` matches a pending session is exempted (bounded instead by the relay session quotas) — `relay_connect`/`relay_listen` stay charged.
+- Inbound input is bounded on both transports: QUIC receive windows ≤32 KiB per stream and ≤128 KiB per connection; the TLS/TCP stream reader is capped at the same per-stream bound and NDJSON frames are capped at 8 KiB.
+- Idle connections are dropped after 30 s (QUIC idle timeout; an idle read timer on TLS/TCP).
 
 ## Trust & identity (ADR-0034)
 
@@ -90,7 +109,7 @@
 
 | Frame | Payload |
 |---|---|
-| `ack` | `{protocol_version:"rdv/1", type:"ack", observed_endpoint:{proto:"udp", ip, port}, ttl, server_time, retry_after?}` (STUN-echo) |
+| `ack` | `{protocol_version:"rdv/1", type:"ack", observed_endpoint:{proto:"udp"\|"tcp", ip, port}, ttl, server_time, retry_after?}` (STUN-echo; `proto` is the transport the frame arrived on) |
 | `response` | `{protocol_version:"rdv/1", type:"response", peers:[{cid, endpoints:[{proto:"tcp"\|"udp", host, port}], cert_fp, bucket, group?, version, capacity, connected, reachable, server_ready, prefer_master, never_master, inbound, startup_time, sync_direction}], count, ttl}` or `{peers: [], count: 0, error:"token_required"\|"rate_limited"\|"overloaded", retry_after?}` |
 | `relay_listening` | `{protocol_version:"rdv/1", type:"relay_listening", ttl}` (§Data relay) |
 | `relay_incoming` | `{protocol_version:"rdv/1", type:"relay_incoming", relay_id, cid, expires_in}` (§Data relay) |
@@ -107,7 +126,10 @@ remain invisible to it, and the peers keep authenticating each other by
 certificate pinning. Inside the paired stream the two peers multiplex their
 several loopback connections (REST + WSS) over the one session with a private
 per-stream framing layer the node never parses. What the node necessarily
-observes is the pairing (`cid` ↔ `cid`) and the volume.
+observes is the pairing (`cid` ↔ `cid`) and the volume. In this section "stream"
+is transport-relative: a QUIC bidirectional stream, or — over TLS/TCP — a
+dedicated connection, since one TCP connection carries one session (so the relay
+listener's control "stream" and each attach are separate connections).
 
 - **On by default**: every node accepts relay frames. Start one with `--no-relay`
   to make it discovery-only: every relay frame is then answered
@@ -116,9 +138,11 @@ observes is the pairing (`cid` ↔ `cid`) and the volume.
 - **Listener** (the peer that serves — the p2p master): opens one stream, sends
   `relay_listen`, receives `relay_listening`. That stream is the **control**
   stream of the registration: the node pushes one `relay_incoming` per requester,
-  and the peer answers with `relay_ping` lines (no reply) to keep the QUIC
-  connection alive while no session runs. A second `relay_listen` for the same
-  `(cid, bucket)` from the same content replaces the previous control stream.
+  and the peer answers with `relay_ping` lines (no reply) to keep the control
+  connection alive while no session runs (over QUIC it keeps the QUIC connection
+  from idling out; over TLS/TCP it keeps the same stream from the idle timer). A
+  second `relay_listen` for the same `(cid, bucket)` from the same content
+  replaces the previous control stream.
 - **Requester**: opens a **fresh** stream and sends `relay_connect` with the
   `target_cid` it wants to reach. The node answers `relay_ok{relay_id}` on that
   same stream; from that byte on the stream is opaque in both directions. A
@@ -164,7 +188,7 @@ observes is the pairing (`cid` ↔ `cid`) and the volume.
 - Malformed, unknown-`type` or oversized frames are silently dropped (no oracle, no log). An IP that exhausts its malformed-frame budget is dropped before the parser runs, so a parse flood costs no event-loop CPU.
 - `refresh` never creates a record: an unknown CID is dropped so the client falls back to `register`.
 - **`capacity` (advisory service-capacity hint)**: integer `0..32`, default `0`, carried on `register` and echoed in every `query` peer. It is the number of concurrent peer-download reads the peer declares it can serve right now (`0` = not a seeder). The rendezvous copies it onto the record and relays it, but it is **not authenticated** and **not authoritative**: the authoritative value is `serve_slots` on the authenticated data-plane handshake (ADR 0030). The requester may use it only to pre-size concurrency and to skip `capacity=0` peers — never to exclude a live seeder. The rendezvous must **not** order the sample by `capacity` (the sample stays random, so a self-declared value cannot buy priority). `refresh` does not carry `capacity` and never mutates it; a changed value requires a new `register`.
-- **`reachable`**: derived from `bool(endpoints)` at `register` time — `true` iff the peer advertised at least one listen endpoint (it can act as a data-plane master). A register that carries no endpoint (e.g. the first STUN register, before the public TCP endpoint is known) is advertised with `reachable=false` and a single-element `endpoints` list carrying the observed UDP source; a requester must not treat it as a master. `refresh` never changes `reachable`.
+- **`reachable`**: derived from `bool(endpoints)` at `register` time — `true` iff the peer advertised at least one listen endpoint (it can act as a data-plane master). A register that carries no endpoint (e.g. the first STUN register, before the public TCP endpoint is known) is advertised with `reachable=false` and a single-element `endpoints` list carrying the observed source endpoint (with the `proto` of the transport that delivered the register); a requester must not treat it as a master. `refresh` never changes `reachable`.
 - **`endpoints` (candidate list)**: the `query` response relays the peer's first **four** declared `endpoints[]`, in order (advisory, unauthenticated). When the peer advertised none, the node relays the single observed source endpoint instead. Each `host` must be a **dialable host** — an IPv4/IPv6 literal or a DNS name, with no control characters, path separators, empty or over-long labels — and a value outside that grammar makes the frame invalid (the same predicate in the daemon and the client mirror). The requester must try the candidates (preferring a host/LAN candidate reachable from its own network) and fall back to the next on failure, so peers behind the same NAT — where the public endpoint is unreachable (no NAT hairpinning) — still connect over the local path. The advertised order is the peer's preference for external reachability; the requester's own-network priority is a client-side policy.
 - **`connected` (advisory connected count)**: a non-negative integer `0..2^53` (like `startup_time`, inside the exactly-representable integer range of a JSON number) carried on `register` and `refresh` and echoed verbatim on every `query` peer (so peers can display group presence without a data-plane round-trip); `refresh` may update it (the only advisory value `refresh` is allowed to change). The node never interprets it.
 - **Election advertisement (`server_ready`, `prefer_master`, `never_master`, `inbound`, `startup_time`, `sync_direction`)**: the same values the client's mDNS TXT record carries (SSOT: `hsync-common` `protocol.p2p` / `protocol.pairing`), relayed verbatim from `register` onto the record and echoed on **every** `query` peer. Defaults when a peer advertises none: `false`, `false`, `false`, `false`, `0.0` (unknown) and `bidirectional`. They let a rendezvous-discovered peer take part in the client's master election exactly like an mDNS-discovered one: `server_ready` marks the serving incumbent (which outranks a newcomer, even a `prefer_master` one), `prefer_master`/`never_master` are the operator election inputs (`never_master` nodes are not electable), `inbound` marks a node with a confirmed externally dialable endpoint (it serves without the relay and outranks a relay-only node), `startup_time` is the earliest-startup tiebreaker and `sync_direction` expresses the bidirectional preference. The node never interprets them, never orders the sample by them, and they are **not authenticated**: a peer may claim any value, and the data plane authenticates its identity by certificate pinning. Like `capacity`, a changed value requires a new `register` — `refresh` never mutates them.
@@ -184,7 +208,7 @@ observes is the pairing (`cid` ↔ `cid`) and the volume.
 
 ## In-memory routing table
 
-- Key `(cid, bucket, group)` → `{ip_src, udp_port, cert_fp, version, protocol, endpoints[], connected, reachable, capacity, expires_at}`.
+- Key `(cid, bucket, group)` → `{ip, port, proto, cert_fp, version, protocol, endpoints[], connected, reachable, capacity, expires_at}`.
 - TTL 60 s; client refresh every 30 s; prune every 15 s; response = random `K` sample.
 - Responses relay the peer's first four declared `endpoints[]` (fallback: a single-element list with the observed source endpoint), within a 32 KiB frame budget.
 - RAM-only, bounded globally, per bucket and per `(bucket, group)` by host-derived ceilings (no disk persistence, no unbounded growth).

@@ -376,7 +376,7 @@ def test_reachable_is_derived_from_endpoints() -> None:
     assert response is not None
     reachable = {p["cid"]: p["reachable"] for p in response["peers"]}
     assert reachable == {CID: True, CID2: False}
-    # the endpoint-less peer falls back to its observed UDP source endpoint
+    # the endpoint-less peer falls back to its observed source endpoint
     fallback = next(p for p in response["peers"] if p["cid"] == CID2)
     assert fallback["endpoints"] == [{"proto": "udp", "host": "198.51.100.8", "port": 54322}]
     # refresh never flips reachable (the record still advertises no endpoint)

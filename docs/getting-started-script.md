@@ -12,7 +12,7 @@ host directory, and starts the node with Docker Compose.
   signature before starting it. When it is missing, the installer prints the
   install command for your platform and stops before writing any file; see
   [Install cosign](#install-cosign). `--no-verify` skips the check.
-- A UDP port reachable from the Internet (443 by default)
+- A port reachable from the Internet (443 by default) over UDP and/or TCP — QUIC uses UDP, TLS/TCP uses TCP
 
 Docker must already be installed. If it is missing — or the Compose v2 plugin is
 missing, or the daemon is not running — the installer stops before writing anything
@@ -46,8 +46,8 @@ the snap avoids the constraint entirely.
 curl -fsSL https://github.com/albertsdk/hsync-rendezvous/releases/latest/download/install.sh | bash
 ```
 
-This downloads and runs the installer in one step. The host's UDP port `443` is
-mapped to the container; the node's persistent TLS identity lives in
+This downloads and runs the installer in one step. The host port `443` is
+mapped to the container on both UDP and TCP; the node's persistent TLS identity lives in
 `~/.local/share/hsync-rendezvous/hsync-data`.
 
 ### Verified install (checksum)
@@ -129,16 +129,16 @@ With a downloaded copy of the script, pass the flag directly:
 
 ### Choose the host port
 
-Clients connect to the host's UDP port (`443`); the container maps it to an
+Clients connect to the host port (`443`) over QUIC/UDP or TLS/TCP; the container maps it to an
 unprivileged internal port. To use another public port, for example `8443`:
 
 ```bash
 ./install.sh --public-port 8443
 ```
 
-The installer maps a **single** host UDP port. To also serve a second port
-(e.g. 53) for clients whose network blocks UDP 443, use the manual Compose
-override in the [Docker guide](getting-started-docker.md#serve-a-second-udp-port-optional).
+The installer maps a **single** host port on both transports. To also serve a second port
+(e.g. 53) for clients whose network blocks 443 on one transport, use the manual Compose
+override in the [Docker guide](getting-started-docker.md#serve-a-second-port-optional).
 
 ### Private node (authenticated rendezvous)
 

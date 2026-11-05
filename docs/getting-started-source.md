@@ -30,9 +30,9 @@ dependencies, and starts the node, forwarding any argument to `hsync-rendezvous`
 (`./run.sh --help`). It stops with a clear message if `../hsync-common` is
 missing.
 
-> UDP **443 is a privileged port** (below 1024). To bind it, run as root or grant
-> `CAP_NET_BIND_SERVICE`; in development prefer an unprivileged port, e.g.
-> `./run.sh run --listen-port 8443`.
+> Port **443 is a privileged port** (below 1024) on both UDP and TCP. To bind it,
+> run as root or grant `CAP_NET_BIND_SERVICE`; in development prefer an
+> unprivileged port, e.g. `./run.sh run --listen-port 8443`.
 
 From source the node has the same features as any other method: protected
 buckets (`--protected-bucket`, repeatable, with a group-keys file) and private
@@ -64,11 +64,11 @@ cd python
 .venv/bin/hsync-rendezvous identity show
 ```
 
-### Serve a second UDP port (optional)
+### Serve a second port (optional)
 
-Clients whose network blocks UDP 443 can still reach the node if it listens
-on more than one port. Listen on 443 **and** 53 (a second port must also be
-open in the host firewall):
+Clients whose network blocks port 443 on one transport can still reach the node
+if it listens on more than one port. Listen on 443 **and** 53 (the node serves
+QUIC/UDP and TLS/TCP on each port; open both in the host firewall):
 
 ```bash
 cd python

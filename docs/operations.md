@@ -37,17 +37,17 @@ systemctl show -p NRestarts hsync-rendezvous.service
 sudo journalctl -u hsync-rendezvous.service -n 50
 ```
 
-The unit is `Type=notify`: `active` means the QUIC/UDP listeners were bound and
-the node announced readiness, not that a process exists. `NRestarts` climbing
-above zero is the signal that something is failing at runtime — read the journal
-for the always-on `warn`/`error` lines instead of waiting for clients to report
-it.
+The unit is `Type=notify`: `active` means at least one enabled listener (QUIC/UDP
+and/or TLS/TCP) was bound and the node announced readiness, not that a process
+exists. `NRestarts` climbing above zero is the signal that something is failing at
+runtime — read the journal for the always-on `warn`/`error` lines instead of
+waiting for clients to report it.
 
 ## Probe it from outside
 
 Supervision answers "is the process alive?". Only a request from another host
 answers "does rendezvous work right now?": a cloud security group, a changed
-firewall rule, a lost NAT mapping or a filtered UDP port all leave a perfectly
+firewall rule, a lost NAT mapping or a filtered port all leave a perfectly
 healthy process that no client can reach.
 
 The probe is a `rdv/1` handshake read from a host that is **not** the node
@@ -58,8 +58,9 @@ installed there):
 hsync trust rendezvous-server fingerprint RENDEZVOUS_HOST:443
 ```
 
-It exits non-zero when no QUIC handshake completes, and prints the fingerprint it
-received — the same value you distribute to clients, so a run also detects an
+It dials the node's transports in the client's default `auto` order (QUIC first,
+TLS/TCP fallback), exits non-zero when none completes, and prints the fingerprint
+it received — the same value you distribute to clients, so a run also detects an
 identity change. To run it on a schedule, add a timer on the monitoring host:
 
 ```bash
@@ -161,7 +162,7 @@ Useful queries:
 hsync_rendezvous_peers_current                     # clients online now
 hsync_rendezvous_peers_peak                        # since the last restart
 max_over_time(hsync_rendezvous_peers_current[7d])   # a week-long peak
-rate(hsync_rendezvous_quic_connections_total[5m])   # handshakes per second
+rate(hsync_rendezvous_connections_total[5m])        # handshakes per second
 rate(hsync_rendezvous_peers_expired_total[5m])      # churn
 ```
 

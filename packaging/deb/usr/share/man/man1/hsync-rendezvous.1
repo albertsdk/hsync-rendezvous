@@ -12,8 +12,9 @@ hsync-rendezvous \- HSYNC P2P rendezvous node (no-log, zero-knowledge)
 is the Internet rendezvous node of the HSYNC sync network. It tells P2P clients
 which peers are currently online, speaking the
 .B rdv/1
-protocol over QUIC/UDP port 443 (TLS 1.3 inside QUIC, mandatory RETRY and
-address-validation tokens).
+protocol over two interchangeable transports on the same ports: QUIC/UDP and
+TLS/TCP (TLS 1.3 on both), with mandatory QUIC RETRY and address-validation
+tokens on the UDP side and admission before the handshake on the TCP side.
 .PP
 The routing table lives exclusively in RAM with a configurable TTL (default
 60 seconds, 1\-3600): nothing peer-related is ever written to disk and no log
@@ -39,7 +40,8 @@ which is the only channel that may contain peer identity.
 .SH COMMANDS
 .TP
 .B run
-Run the rendezvous node (rdv/1): one QUIC/UDP listener, or several with
+Run the rendezvous node (rdv/1): a QUIC/UDP and a TLS/TCP listener on each port,
+or several ports with
 .BR \-\-listen\-ports .
 .TP
 .B identity show
@@ -54,7 +56,7 @@ only for new names.
 .SH OPTIONS
 .TP
 .BI run\ \fR--listen-host\fP= HOST [\fI:PORT\fP]
-Address to bind the QUIC/UDP listener to. Accepts an optional port
+Address to bind the listeners (QUIC/UDP and TLS/TCP) to. Accepts an optional port
 .RI ( HOST [: PORT ],
 e.g.
 .IR 0.0.0.0:443
@@ -64,23 +66,42 @@ Default:
 .IR 0.0.0.0 .
 .TP
 .BI run\ \fR--listen-port\fP= PORT
-UDP port to listen on (1\-65535). Default: 443 (QUIC/HTTP3). Ports below 1024 need root or
+Port to listen on for both transports (1\-65535). Default: 443 (QUIC/HTTP3 and HTTPS). Ports below 1024 need root or
 .BR CAP_NET_BIND_SERVICE .
 Mutually exclusive with a port in
 .BR \-\-listen\-host .
 Use
 .B \-\-listen\-ports
-to listen on several UDP ports at once (client\-egress fallback).
+to listen on several ports at once (client\-egress fallback).
 .TP
 .BI run\ \fR--listen-ports\fP= P1,P2,...
-Comma-separated UDP ports to listen on in one process (multi-port). The
+Comma-separated ports to listen on in one process (multi-port), on both
+transports. The
 listeners share one in-memory routing table, so a peer registered via one port
 is visible to a query on another. Use it to offer several inbound doors when a
-client's egress firewall may block UDP 443 but allow another UDP port; the
+client's egress firewall may block UDP 443 but allow another port; the
 recommended set is 443,53. Binding is best-effort: a port that cannot bind is
-skipped with an always-on warning and the node fails only if none bind.
+skipped with an always-on warning and the node fails only if no transport binds
+any port.
 Mutually exclusive with
 .BR \-\-listen\-port .
+.TP
+.B run\ \fR--udp\fP / \fR--no-udp\fP
+Serve the QUIC/UDP listener (on by default;
+.B \-\-no\-udp
+disables it). Env form:
+.BR HSYNC_RENDEZVOUS_UDP .
+.TP
+.B run\ \fR--tcp\fP / \fR--no-tcp\fP
+Serve the TLS/TCP listener on the same ports (on by default;
+.B \-\-no\-tcp
+disables it, e.g. when a co-hosted HTTPS server already holds TCP 443). The two
+transports are interchangeable for discovery and relay; a client picks one with
+its own
+.B \-\-rendezvous\-transport
+option. Env form:
+.BR HSYNC_RENDEZVOUS_TCP .
+Disabling both transports is a configuration error (exit 2).
 .TP
 .BI run\ \fR--identity\fP= PATH
 Path of the persistent TLS identity (key+cert), created on first run and reused
@@ -154,7 +175,8 @@ node with no group key fails fast with exit code 2. Env form:
 .BR HSYNC_RENDEZVOUS_PRIVATE=1 .
 .TP
 .B run\ \fR--upnp\fP
-Map every bound QUIC/UDP listener port with UPnP (opt\-in; off by default).
+Map every bound listener port with UPnP for both transports (UDP for QUIC and
+TCP for TLS/TCP; opt\-in; off by default).
 With
 .BR \-\-listen\-ports ,
 each bound port is mapped so every offered door is also reachable from the WAN.
@@ -457,9 +479,11 @@ Configuration error (missing/duplicate group key, private node without a key,
 out-of-range value): the node refuses to start.
 .TP
 .B 3
-Listener bind failure: the QUIC/UDP port is privileged, already in use, or
+Listener bind failure: no enabled transport could bind any requested port
+(privileged port, already in use, or
 .B --listen-host
-is not a local address. The message on stderr explains the remediation.
+is not a local address). A conflict on one transport only is skipped best-effort.
+The message on stderr explains the remediation.
 .TP
 .B 4
 Readiness\-file failure: the path given to
@@ -488,10 +512,11 @@ The reported populations differ:
 and
 .B hsync_rendezvous_peers_peak
 count the clients registered right now and the highest level reached, while
-.B hsync_rendezvous_quic_connections_current
+.B hsync_rendezvous_connections_current
 and its
 .I _peak
-sibling count open QUIC connections \- handshake concurrency, not clients, because a
+sibling count open connections per transport (labelled
+.IR quic / tcp ) \- handshake concurrency, not clients, because a
 client opens one connection per exchange and lets it idle out after 30 seconds.
 .B hsync_rendezvous_build_info
 identifies the running build. Peaks are observed when the event happens, never

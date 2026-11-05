@@ -313,7 +313,8 @@ def test_upnp_manager_requests_a_finite_lease(monkeypatch: object) -> None:
 
     captured: dict[str, object] = {}
 
-    def fake_add(service, *, internal_port, external_port, lease_duration=0, **_kw):
+    def fake_add(service, *, internal_port, external_port, lease_duration=0, protocol="UDP", **_kw):
+        captured.setdefault("protocols", []).append(protocol)
         captured["lease"] = lease_duration
         captured["external_port"] = external_port
 
@@ -323,6 +324,7 @@ def test_upnp_manager_requests_a_finite_lease(monkeypatch: object) -> None:
     manager._ensure_mapped()
     assert captured["lease"] == 600  # two refresh windows
     assert captured["external_port"] == 443
+    assert captured["protocols"] == ["UDP", "TCP"]
 
 
 @pytest.mark.asyncio
@@ -338,7 +340,8 @@ async def test_upnp_manager_close_removes_the_mapping(monkeypatch: object) -> No
     manager = upnp_mod.UpnpManager(443)
     manager._active = SERVICE
     await manager.close()
-    assert calls == [(443, "UDP")]
+    # Both transports are offered on the one node port, so both are unmapped.
+    assert calls == [(443, "UDP"), (443, "TCP")]
     assert manager._active is None
 
 
