@@ -1612,4 +1612,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.15"
-content-hash = "23220fc081685c22919389b0c5c63eab8b47a7fed852ce8976185cddeaa24263"
+content-hash = "0e6adf0896db4c859b6e460e68ebf179165244a21f2cb68189fc5a1e6fb93593"
