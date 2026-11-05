@@ -56,7 +56,7 @@ jobs:
         run: python ../hsync-common/scripts/dev/check_doc_links.py .
 
       - name: Install Poetry
-        run: pipx install poetry
+        run: pipx install poetry==2.4.1
 
       # The black-box harness resolves the node executable as
       # python/.venv/bin/hsync-rendezvous, so the virtualenv must live inside the
