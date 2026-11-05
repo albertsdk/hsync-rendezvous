@@ -12,7 +12,7 @@ unknown-field rejection; do not fork the shapes here.
 Every frame carries `{protocol_version, type, ...}`. `_RdvFrame`
 (`python/src/hsync_rendezvous/protocol.py::_RdvFrame`) is the shared base: mandatory `type`
 discriminator plus `protocol_version` pinned to `rdv/1`
-(`PROTOCOL_VERSION_RDV`, `python/src/hsync_rendezvous/protocol.py::PROTOCOL_VERSION_RDV`). The server routes on `type` and never
+(`PROTOCOL_VERSION_RDV`, `hsync_common/protocol/rendezvous.py::PROTOCOL_VERSION_RDV`). The server routes on `type` and never
 guesses the frame kind from the payload shape.
 
 ## Frame inventory
