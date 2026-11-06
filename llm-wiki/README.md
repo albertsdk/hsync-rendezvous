@@ -4,6 +4,12 @@ Internal, agent-optimized knowledge base for the `hsync-rendezvous` project
 (no-log, zero-knowledge P2P rendezvous node speaking `rdv/1` over **QUIC/UDP**
 and **TLS/TCP**).
 
+**Source references.** Local paths are relative to this repository root and use
+`path/to/file.ext::Symbol`. Cross-repo references are relative to the `hsync/`
+workspace root and start with the sibling repo directory (`hsync-common/…`,
+`hsync-client/…`, `hsync-server/…`, `hsync-rendezvous/…`, `hsync-desktop/…`);
+they are code spans, not hyperlinks.
+
 ## Table of contents
 
 | Document | Content |
