@@ -154,7 +154,9 @@ cd hsync-rendezvous && python/.venv/bin/python bench/bench_quic.py --connections
 
 L2/L3 drive the binary through the wire protocol only (path via
 `HSYNC_RENDEZVOUS_BIN`, default the Python build), so they run unchanged against the
-C port. See [`bench/README.md`](bench/README.md) for the full tier table and
+C port. The L2 load harness (`bench_quic.py`) drives QUIC/UDP; the functional and
+black-box coverage spans both transports (QUIC/UDP and TLS/TCP). See
+[`bench/README.md`](bench/README.md) for the full tier table and
 the measurement methodology.
 
 > From the workspace root, `make lint` (both ruff surfaces), `make test-python`

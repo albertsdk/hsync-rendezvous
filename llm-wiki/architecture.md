@@ -255,6 +255,7 @@ Four consumer-facing ways to run a node, kept identical in shape to
 | `python/tests/test_scaffold.py` | Fixtures / spec contract + frame schema positives/negatives (rigid schema) |
 | `python/tests/test_fuzz_harness.py` | Bounded deterministic fuzz burst (decoder/SSDP/token invariant targets; long runs via `python/fuzz/fuzz_boot.py --seconds N`, decision #47) + coverage-guided burst (decision #48) |
 | `python/tests/test_server.py` | QUIC loopback: register/query/protected refusal, private-node refusal, garbage frames, pipelined frames on one stream, per-IP connection guard (cap + release), session-failure diagnostics (peer-free always-on line + opt-in debug detail) |
+| `python/tests/test_server_tcp.py` | TLS/TCP loopback: admission before the handshake (no plaintext read), ALPN refusal, pipelined frames on one connection, relay over TCP, oversized-frame close, idle reaping, per-IP guard release |
 | `python/tests/test_identity.py` | Persistent identity (default): create/load/rotate, `0600`/`0700` permissions, ECDSA P-256 only, key/cert consistency, stale-temp recovery, SAN from bind + `--public-host`, rotation preserves existing DNS/IP SANs without duplicates, 20-year validity, on-load permission hardening, rotation hint path |
 | `python/tests/test_nolog.py` | Zero-write invariant under read-only fs |
 | `python/tests/test_upnp.py` | SSDP/SOAP shapes, error downgrade, stateless no-IGD, LOCATION/source/redirect hardening |
@@ -270,7 +271,7 @@ build) as a subprocess, waits for the `HSYNC_RENDEZVOUS_READY_FILE` readiness
 seam (keyed on the ready file appearing with a PID, not on PID equality with the
 launcher — a onefile-packaged binary runs the app in a child process), and
 drives it **only** through the public CLI + `rdv/1` wire protocol
-(QUIC/UDP, NDJSON, ALPN `hsync-rdv/1`). It never imports
+(QUIC/UDP and TLS/TCP, NDJSON, ALPN `hsync-rdv/1`). It never imports
 `hsync_rendezvous`. The same suite will validate the future `c/`
 port unchanged. Benchmarks (`bench/`) follow the same rule for L2/L3
 (`bench_quic.py`, `soak.py` spawn the binary); L1 (`bench/bench_handler.py`) and

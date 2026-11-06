@@ -17,6 +17,11 @@ benchmark runs unchanged against the future `c/` port. L1 (handler),
 L6-A and the L4/L5 diagnostics are Python-internal; L5's CPU sampling needs Linux
 `/proc` and reports `n/a` elsewhere.
 
+These load/diagnostic tiers drive **QUIC/UDP** through the wire harness in
+`tests/harness.py`. The **TLS/TCP** transport is covered by the functional and
+black-box test suites (see [`tests/README.md`](../tests/README.md)), not by the
+load tiers.
+
 > **The `quic-handshake` metric measures the handshake, not the teardown.**
 > `aioquic`'s connect context manager calls `wait_closed()` on exit, which blocks
 > on the QUIC closing-period drain timer (`3 * PTO` — ~130 ms of idle wait on

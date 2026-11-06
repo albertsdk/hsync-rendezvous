@@ -92,7 +92,7 @@ excluded from the union: they are never validated on the input path.
 
 | Constant | Location | Rule |
 |---|---|---|
-| `CID_PATTERN` | imported from `hsync_common.models.event` (`hsync_common/models/event.py::CID_PATTERN`) and re-exported | `^[A-Za-z0-9]{21}$` — **SSOT import** (hsync-common), pinned to the rdv/1 spec value by `test_cid_pattern_matches_boot1_spec` |
+| `CID_PATTERN` | imported from `hsync_common.ids` (`hsync-common/hsync_common/ids.py::CID_PATTERN`) | `^[A-Za-z0-9]{21}$` — **SSOT import** (hsync-common), pinned to the rdv/1 spec value by `test_cid_pattern_matches_boot1_spec` |
 | `BucketName` | `protocol.py` | canonical HSYNC bucket name via `hsync_common.path_validation.is_valid_bucket_name` (`[A-Za-z0-9]` with `-`/`_` in the middle, 1..63) — applied to every wire `bucket` |
 | `BucketToken` | `protocol.py` | 64 lowercase hex characters (grammar `_BUCKET_TOKEN_RE`, `BUCKET_TOKEN_LEN`) — enforced as a wire-model validator (decision #46), so a token outside the key-derivation domain is an invalid frame, not a failed-token attempt |
 | `BUCKET_TOKEN_LEN` | `protocol.py` | 64 (lowercase hex = `hex(32 bytes)`), derived as `HMAC-SHA256(key, "rdv/1" || bucket)[:32]` |
@@ -121,7 +121,7 @@ query           ──► RdvQuery                    ──► response ──�
 leave           ──► RdvLeave                    ──► (no reply frame)
 ```
 
-`RdvPeer` is projected from a `PeerRecord` (handler `_to_peer`,
+`RdvPeer` is projected from a `PeerRecord` (wire `peer_fragment`,
 `python/src/hsync_rendezvous/wire.py::peer_fragment`): the peer's first
 `MAX_RELAY_ENDPOINTS` (four) endpoints are relayed, falling back to the observed
 source endpoint when the register carried none; `_query` then stops adding peers

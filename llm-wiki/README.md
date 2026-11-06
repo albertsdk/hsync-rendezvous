@@ -1,7 +1,8 @@
 # HSYNC Rendezvous — LLM Wiki
 
 Internal, agent-optimized knowledge base for the `hsync-rendezvous` project
-(no-log, zero-knowledge P2P rendezvous node speaking `rdv/1`).
+(no-log, zero-knowledge P2P rendezvous node speaking `rdv/1` over **QUIC/UDP**
+and **TLS/TCP**).
 
 ## Table of contents
 
@@ -80,7 +81,7 @@ Internal, agent-optimized knowledge base for the `hsync-rendezvous` project
    the mandatory `protocol_version` (`rdv/1`) and updating spec, fixtures,
    implementation and tests atomically.
 8. **SSOT note**: the CID shape and the bucket-name rule are **imported** from
-   `hsync-common` (`hsync_common.models.event.CID_PATTERN`,
+   `hsync-common` (`hsync_common.ids.CID_PATTERN`,
    `hsync_common.path_validation.is_valid_bucket_name`), not re-declared locally;
    the rdv/1 spec + fixtures stay the cross-language contract. The daemon also
    reuses `hsync_common.ssl_utils` for its TLS identity (see
