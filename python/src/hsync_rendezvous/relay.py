@@ -36,30 +36,35 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
 from hsync_common.ratelimit import TokenBucket
 
 from hsync_rendezvous.diagnostics import debug_event, debug_log
 from hsync_rendezvous.framing import FrameTooLarge, read_ndjson
-from hsync_rendezvous.protocol import (
-    PROTOCOL_VERSION_RDV,
-    RDV_FRAME_ADAPTER,
-    RDV_RELAY_ERROR_ADAPTER,
-    RDV_RELAY_INCOMING_ADAPTER,
-    RDV_RELAY_LISTENING_ADAPTER,
-    RDV_RELAY_OK_ADAPTER,
-    RdvError,
-    RdvRelayAttach,
-    RdvRelayConnect,
-    RdvRelayError,
-    RdvRelayIncoming,
-    RdvRelayListen,
-    RdvRelayListening,
-    RdvRelayOk,
-    RdvRelayPing,
+from hsync_rendezvous.protocol import RdvRelayAttach, RdvRelayConnect, RdvRelayListen
+from hsync_rendezvous.relay_state import (
+    Listener as _Listener,
 )
+from hsync_rendezvous.relay_state import (
+    Pending as _Pending,
+)
+from hsync_rendezvous.relay_state import (
+    PrefixedReader as PrefixedReader,
+)
+from hsync_rendezvous.relay_state import (
+    RelayHandoff as RelayHandoff,
+)
+from hsync_rendezvous.relay_state import (
+    RelayQuotas as RelayQuotas,
+)
+from hsync_rendezvous.relay_wire import close_writer as _close
+from hsync_rendezvous.relay_wire import incoming_frame as _incoming
+from hsync_rendezvous.relay_wire import is_ping as _is_ping
+from hsync_rendezvous.relay_wire import listening_frame as _listening
+from hsync_rendezvous.relay_wire import ok_frame as _ok
+from hsync_rendezvous.relay_wire import refuse as _refuse
+from hsync_rendezvous.relay_wire import terminate as _line
 from hsync_rendezvous.stats import NodeStats
 
 __all__ = [
@@ -88,93 +93,6 @@ RELAY_ID_BYTES = 16
 # streams are opaque and never framed, so this bound only protects the control
 # stream parser.
 _CONTROL_FRAME_BYTES = 1024
-
-
-@dataclass(slots=True, frozen=True)
-class RelayQuotas:
-    """Hard bounds applied to the relay, derived from the host or the flags.
-
-    ``session_bytes`` and ``bytes_per_second`` are unlimited when ``0``; the
-    session cap is enforced by closing the session (a requester reconnects and
-    resumes), the byte rate by throttling the pump (real backpressure).
-    """
-
-    max_sessions: int
-    max_sessions_per_ip: int
-    max_sessions_per_bucket: int
-    session_bytes: int = 0
-    bytes_per_second: int = 0
-
-
-@dataclass(slots=True, frozen=True)
-class RelayHandoff:
-    """A validated relay frame whose work needs the connection's own streams.
-
-    ``RendezvousHandler`` validates and authorizes relay frames (it owns the token
-    policy and the record-ownership rules) and returns one of these instead of
-    reply bytes; the QUIC stream coroutine then hands the reader/writer to
-    :meth:`RelayRegistry.run`. ``authorized=False`` is how a frame whose stream
-    is already opaque (``relay_attach``) is refused: the node just closes it.
-    """
-
-    model: RdvRelayListen | RdvRelayConnect | RdvRelayAttach
-    authorized: bool = True
-
-
-@dataclass(slots=True)
-class _Listener:
-    cid: str
-    bucket: str
-    group: str | None
-    peer_ip: str
-    writer: Any
-    sessions: int = 0
-
-
-@dataclass(slots=True)
-class _Pending:
-    listener: _Listener
-    dialer_cid: str
-    dialer_ip: str
-    dialer_reader: Any
-    dialer_writer: Any
-    bucket: str
-    attached: asyncio.Event = field(default_factory=asyncio.Event)
-    done: asyncio.Event = field(default_factory=asyncio.Event)
-    acceptor: tuple[Any, Any] | None = None
-    bytes: int = 0
-    reserved: bool = True
-    # Last instant either direction forwarded an opaque chunk (idle watch).
-    last_activity: float = field(default_factory=time.monotonic)
-
-
-class PrefixedReader:
-    """Reader that replays bytes the frame reader already buffered.
-
-    The NDJSON frame reader may read past the newline of a relay handshake line
-    (``relay_attach``/``relay_connect``), and those bytes are the *beginning* of
-    the opaque stream: dropping them would corrupt the relayed TLS of any client
-    that pipelines its first bytes with the handshake. ``read`` returns the
-    buffered prefix first, then delegates to the connection's own reader.
-    """
-
-    __slots__ = ("_buffer", "_reader")
-
-    def __init__(self, prefix: bytes, reader: Any) -> None:
-        self._buffer = bytearray(prefix)
-        self._reader = reader
-
-    async def read(self, size: int = -1) -> bytes:
-        """Return buffered bytes first, then read from the wrapped stream."""
-        if self._buffer:
-            if size is None or size < 0:
-                data = bytes(self._buffer)
-                self._buffer.clear()
-                return data
-            data = bytes(self._buffer[:size])
-            del self._buffer[:size]
-            return data
-        return await self._reader.read(size)
 
 
 class RelayRegistry:
@@ -558,67 +476,3 @@ class RelayRegistry:
             _close(listener.writer)
         self._listeners.clear()
         debug_log("relay registry closed")
-
-
-def _close(writer: Any) -> None:
-    """Close a QUIC stream writer, tolerating an already-closed stream."""
-    try:
-        if not writer.is_closing():
-            writer.close()
-    except Exception:  # noqa: BLE001 - teardown must never raise
-        return
-
-
-async def _refuse(writer: Any, error: RdvError) -> None:
-    """Write a ``relay_error`` line and close the stream."""
-    try:
-        writer.write(_line(_error(error)))
-        await writer.drain()
-    except (ConnectionError, TimeoutError, OSError):
-        pass
-    _close(writer)
-
-
-def _is_ping(raw: bytes, cid: str, bucket: str) -> bool:
-    """Whether ``raw`` is a ``relay_ping`` for this listener (never logged)."""
-    try:
-        frame = RDV_FRAME_ADAPTER.validate_json(raw)
-    except Exception:  # noqa: BLE001 - any validation failure is a violation
-        return False
-    return isinstance(frame, RdvRelayPing) and frame.cid == cid and frame.bucket == bucket
-
-
-def _line(payload: bytes) -> bytes:
-    """Terminate one serialized frame the way ``rdv/1`` NDJSON expects."""
-    return payload + b"\n"
-
-
-def _listening(*, ttl: int) -> bytes:
-    return RDV_RELAY_LISTENING_ADAPTER.dump_json(
-        RdvRelayListening(protocol_version=PROTOCOL_VERSION_RDV, type="relay_listening", ttl=ttl)
-    )
-
-
-def _incoming(*, relay_id: str, cid: str, expires_in: int) -> bytes:
-    return RDV_RELAY_INCOMING_ADAPTER.dump_json(
-        RdvRelayIncoming(
-            protocol_version=PROTOCOL_VERSION_RDV,
-            type="relay_incoming",
-            relay_id=relay_id,
-            cid=cid,
-            expires_in=expires_in,
-        )
-    )
-
-
-def _ok(relay_id: str) -> bytes:
-    return RDV_RELAY_OK_ADAPTER.dump_json(
-        RdvRelayOk(protocol_version=PROTOCOL_VERSION_RDV, type="relay_ok", relay_id=relay_id)
-    )
-
-
-def _error(error: RdvError) -> bytes:
-    """Serialize one uniform refusal (never a bucket-existence oracle)."""
-    return RDV_RELAY_ERROR_ADAPTER.dump_json(
-        RdvRelayError(protocol_version=PROTOCOL_VERSION_RDV, type="relay_error", error=error)
-    )

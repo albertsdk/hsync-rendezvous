@@ -256,9 +256,9 @@ async def test_admission_refused_before_handshake() -> None:
 @pytest.mark.asyncio
 async def test_handshake_timeout_releases_admission(monkeypatch) -> None:
     """A connection that never completes the handshake is closed and its slot freed."""
-    import hsync_rendezvous.server as server_mod
+    import hsync_rendezvous.tcp as tcp_mod
 
-    monkeypatch.setattr(server_mod, "TCP_HANDSHAKE_TIMEOUT", 0.2)
+    monkeypatch.setattr(tcp_mod, "TCP_HANDSHAKE_TIMEOUT", 0.2)
     handler = RendezvousHandler(enforce_rate_limits=False)
     guard = ConnectionGuard(handshake_rate=1000.0, handshake_burst=1000, active_max=10)
     server, port, _identity = await start_tcp_server(
@@ -300,9 +300,9 @@ async def test_oversized_frame_closes_the_session() -> None:
 @pytest.mark.asyncio
 async def test_idle_connection_is_reaped(monkeypatch) -> None:
     """A silent connection is dropped by the idle read timer."""
-    import hsync_rendezvous.server as server_mod
+    import hsync_rendezvous.tcp as tcp_mod
 
-    monkeypatch.setattr(server_mod, "RDV_IDLE_TIMEOUT", 0.2)
+    monkeypatch.setattr(tcp_mod, "RDV_IDLE_TIMEOUT", 0.2)
     handler = RendezvousHandler(enforce_rate_limits=False)
     server, port, _identity = await start_tcp_server("127.0.0.1", 0, handler)
     try:

@@ -23,18 +23,14 @@ from pydantic import SecretStr, ValidationError
 from hsync_rendezvous.diagnostics import debug_enabled, debug_event, debug_log
 from hsync_rendezvous.protocol import (
     BUCKET_TOKEN_LEN,
-    MAX_RELAY_ENDPOINTS,
     MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION_RDV,
     RDV_FRAME_ADAPTER,
-    RDV_PEER_ADAPTER,
     RDV_RELAY_ERROR_ADAPTER,
     BucketProto,
-    Endpoint,
     RdvError,
     RdvFrame,
     RdvLeave,
-    RdvPeer,
     RdvQuery,
     RdvRefresh,
     RdvRegister,
@@ -54,6 +50,7 @@ from hsync_rendezvous.tokens import (
     derive_bucket_token,
     is_valid_bucket_token,
 )
+from hsync_rendezvous.wire import ack_bytes, peer_fragment, response_bytes
 
 __all__ = [
     "RendezvousConfigError",
@@ -837,99 +834,23 @@ class RendezvousHandler:
         error: RdvError | None,
         retry_after: int | None,
     ) -> bytes:
-        """Assemble the response envelope around pre-serialized peer fragments.
-
-        The envelope carries only server-controlled values (a fixed protocol
-        version/type, integers, and the ASCII ``RdvError`` literal), so it needs
-        no JSON escaping; every peer fragment is still produced by the pydantic
-        adapter (``_to_peer``). Byte-for-byte identical to what the test-side pydantic mirror
-        (``tests/rdv_response``) emits — pinned by
-        ``test_response_bytes_match_the_pydantic_serializer``.
-        """
-        error_field = b"null" if error is None else b'"' + error.encode("ascii") + b'"'
-        retry_field = b"null" if retry_after is None else str(retry_after).encode("ascii")
-        return (
-            b'{"protocol_version":"'
-            + PROTOCOL_VERSION_RDV.encode("ascii")
-            + b'","type":"response","peers":['
-            + b",".join(peers)
-            + b'],"count":'
-            + str(len(peers)).encode("ascii")
-            + b',"ttl":'
-            + str(int(self.ttl)).encode("ascii")
-            + b',"error":'
-            + error_field
-            + b',"retry_after":'
-            + retry_field
-            + b"}"
-        )
+        """Assemble the response envelope (byte layout lives in ``wire.py``)."""
+        return response_bytes(ttl=self.ttl, peers=peers, error=error, retry_after=retry_after)
 
     def _ack(self, peer_ip: str, peer_port: int, *, proto: BucketProto = "udp") -> bytes:
         # STUN-echo: reply with the source endpoint the datagrams actually
         # arrived from (observed port = the NAT-mapped public port, if any).
         # ``proto`` is the transport the frame arrived on: the client uses the
         # observed host (with its own p2p listen port) as a fallback candidate.
-        # Hand-assembled like ``_response``: the envelope is server-controlled
-        # and the observed ip/port come from the socket, so a pydantic round-trip
-        # would only re-validate already-trusted values. Byte-identical to the
-        # model dump — pinned by ``test_ack_bytes_match_the_pydantic_serializer``.
-        return (
-            b'{"protocol_version":"rdv/1","type":"ack","observed_endpoint":'
-            b'{"proto":"'
-            + proto.encode("ascii")
-            + b'","ip":"'
-            + peer_ip.encode("ascii")
-            + b'","port":'
-            + str(peer_port).encode("ascii")
-            + b'},"ttl":'
-            + str(int(self.ttl)).encode("ascii")
-            + b',"server_time":"'
-            + _utc_now_z().encode("ascii")
-            + b'","retry_after":null}'
+        return ack_bytes(
+            ttl=self.ttl,
+            peer_ip=peer_ip,
+            peer_port=peer_port,
+            proto=proto,
+            server_time=_utc_now_z(),
         )
 
     @staticmethod
     def _to_peer(record: PeerRecord, model: RdvQuery) -> bytes:
-        """Relay the peer's candidate endpoints over the observed source.
-
-        The first :data:`MAX_RELAY_ENDPOINTS` advertised candidates are relayed
-        verbatim and in order; only a register that carried no endpoint at all
-        (the first STUN register) falls back to a single-element list with the
-        observed source endpoint. Both branches share one projection so the
-        relayed advisory fields (``capacity``, ``reachable`` and the election
-        advertisement) cannot drift; the whole record is relayed verbatim and
-        never interpreted.
-
-        Returns the pre-serialized JSON fragment (not the ``RdvPeer`` model), so
-        the record caches bytes — see ``PeerRecord.wire``.
-        """
-        cached = record.wire
-        if cached is not None:
-            return cached
-        if record.endpoints:
-            endpoints = [
-                Endpoint(proto=proto, host=host, port=port)
-                for (proto, host, port) in record.endpoints[:MAX_RELAY_ENDPOINTS]
-            ]
-        else:
-            endpoints = [Endpoint(proto=record.proto, host=record.ip, port=record.port)]
-        peer = RdvPeer(
-            cid=record.cid,
-            endpoints=endpoints,
-            cert_fp=record.cert_fp,
-            bucket=model.bucket,
-            group=record.group,
-            version=record.version,
-            capacity=record.capacity,
-            connected=record.connected,
-            reachable=record.reachable,
-            server_ready=record.server_ready,
-            prefer_master=record.prefer_master,
-            never_master=record.never_master,
-            inbound=record.inbound,
-            startup_time=record.startup_time,
-            sync_direction=record.sync_direction,
-        )
-        fragment = RDV_PEER_ADAPTER.dump_json(peer)
-        record.wire = fragment
-        return fragment
+        """Relay one peer's candidate endpoints (serialization in ``wire.py``)."""
+        return peer_fragment(record, model)

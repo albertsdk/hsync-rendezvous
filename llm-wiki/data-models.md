@@ -109,8 +109,8 @@ excluded from the union: they are never validated on the input path.
 | `RoutingTable` | `python/src/hsync_rendezvous/routing.py::RoutingTable` | In-memory registry (`upsert`→`bool`/`remove`/`get`/`prune`/`sample`/`count`/`source_ips`); never persisted, single-thread (no lock: one event loop). `upsert` returns `False` above a host-derived `max_records` ceiling, a `max_records_per_bucket` ceiling (the one a registrant cannot rotate around, since `group` is free-form) or a `max_records_per_group` ceiling (so one sample cannot be saturated), so the handler can apply backpressure. `get` returns only an **active** record, so a TTL lapse frees the key and never revives through `refresh`. Backed by three secondary indexes — `_by_group` (bucket+group → keys, O(1) `sample`), `_by_cid` (cid+bucket → keys, O(1) `remove`), `_pos` (key → list position for O(1) swap-remove) — plus the `_per_bucket` counter. `prune` rebuilds the indexes in bulk when ≥ 50% of records expire, else removes incrementally. |
 | `TokenBucketLimiter` | `hsync_common/ratelimit.py` (re-exported at `python/src/hsync_rendezvous/ratelimit.py`) | Shared in-memory token bucket SSOT (also used by `hsync-client`) for the per-IP/per-(IP, bucket) rate limits; `has_tokens` is a non-consuming peek used by the pre-parse malformed-frame gate; `max_keys` evicts the least-recently-used key on insert and `evict_stale` drops fully-refilled buckets, bounding key-state growth |
 | `ResourceLimits` | `python/src/hsync_rendezvous/resources.py` | Host-derived ceilings (`max_peer_records`, `max_records_per_bucket`, `max_records_per_group`, `max_limiter_keys`, `max_active_connections`, `max_active_connections_per_ip`) from available RAM (the process's own cgroup limit, then `MemAvailable`, then sysconf) and CPU count; `detect()` is read-only/best-effort with a conservative fallback |
-| `ConnectionGuard` | `python/src/hsync_rendezvous/server.py` | Per-IP handshake budget + per-IP and process-wide open-connection caps, sized by `ResourceLimits`; checked before any handshake work, released on `ConnectionTerminated` |
-| `NodeIdentity` | `python/src/hsync_rendezvous/server.py` | Self-signed TLS identity (cert + ECDSA P-256 key). Persisted (`0600`/`0700`) by default via `load_or_create_identity`/`rotate_identity`, or built in memory by `make_identity` (`--ephemeral`). `expires_at` is the certificate `NotAfter`; `fingerprint` is the leaf-DER SHA-256 (`sha256:<hex>`), the trust anchor for client pinning (ADR-0034/ADR-0037) |
+| `ConnectionGuard` | `python/src/hsync_rendezvous/guard.py` | Per-IP handshake budget + per-IP and process-wide open-connection caps, sized by `ResourceLimits`; checked before any handshake work, released on `ConnectionTerminated` |
+| `NodeIdentity` | `python/src/hsync_rendezvous/identity.py` | Self-signed TLS identity (cert + ECDSA P-256 key). Persisted (`0600`/`0700`) by default via `load_or_create_identity`/`rotate_identity`, or built in memory by `make_identity` (`--ephemeral`). `expires_at` is the certificate `NotAfter`; `fingerprint` is the leaf-DER SHA-256 (`sha256:<hex>`), the trust anchor for client pinning (ADR-0034/ADR-0037) |
 
 ## Relationships
 
@@ -121,7 +121,7 @@ leave           ──► RdvLeave                    ──► (no reply frame)
 ```
 
 `RdvPeer` is projected from a `PeerRecord` (handler `_to_peer`,
-`python/src/hsync_rendezvous/handler.py::_to_peer`): the peer's first
+`python/src/hsync_rendezvous/wire.py::peer_fragment`): the peer's first
 `MAX_RELAY_ENDPOINTS` (four) endpoints are relayed, falling back to the observed
 source endpoint when the register carried none; `_query` then stops adding peers
 once the `MAX_RESPONSE_BYTES` budget is spent. The projection is serialized once

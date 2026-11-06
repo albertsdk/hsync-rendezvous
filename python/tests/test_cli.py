@@ -376,8 +376,8 @@ def _patch_run_no_side_effects(monkeypatch, start_servers) -> None:
     with the same fake, which returns the identical ``(servers, ports,
     identity, failures)`` shape.
     """
-    monkeypatch.setattr("hsync_rendezvous.cli.start_servers", start_servers)
-    monkeypatch.setattr("hsync_rendezvous.cli.start_tcp_servers", start_servers)
+    monkeypatch.setattr("hsync_rendezvous.binding.start_servers", start_servers)
+    monkeypatch.setattr("hsync_rendezvous.binding.start_tcp_servers", start_servers)
     monkeypatch.setattr("hsync_rendezvous.cli._uvloop_runner", lambda: None)
     monkeypatch.setattr("hsync_rendezvous.cli._install_shutdown_handlers", lambda: None)
 
@@ -696,7 +696,7 @@ def test_watchdog_loop_feeds_the_service_manager(monkeypatch) -> None:
     """The watchdog task pings at the armed interval (half of WatchdogSec=)."""
     pings: list[str] = []
     monkeypatch.setattr(
-        "hsync_rendezvous.cli.notify_watchdog", lambda: pings.append("ping") or True
+        "hsync_rendezvous.lifecycle.notify_watchdog", lambda: pings.append("ping") or True
     )
 
     async def _run() -> None:
