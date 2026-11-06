@@ -788,7 +788,9 @@ def test_every_loopback_form_is_accepted(host: str, tmp_path: Path) -> None:
     token_file = _metrics_token_file(tmp_path)
     endpoint = _resolve_metrics(host=host, port=9101, token_fd=None, token_file=str(token_file))
     assert endpoint is not None
-    assert (endpoint.host, endpoint.port) == (host, 9101)
+    # A name is bound as a literal so bind-time resolution cannot move it off loopback.
+    expected_host = "127.0.0.1" if host == "localhost" else host
+    assert (endpoint.host, endpoint.port) == (expected_host, 9101)
     assert endpoint.token.get_secret_value() == "t" * 64
 
 
@@ -833,6 +835,16 @@ def test_the_two_metrics_token_sources_are_mutually_exclusive(tmp_path: Path) ->
 def test_a_metrics_endpoint_without_a_token_is_refused() -> None:
     with pytest.raises(RendezvousConfigError, match="requires a bearer token"):
         _resolve_metrics(host="127.0.0.1", port=9101, token_fd=None, token_file=None)
+
+
+def test_localhost_metrics_host_is_normalised_to_a_literal(tmp_path: Path) -> None:
+    """A name must not be re-resolved at bind time (resolver/hosts poisoning)."""
+    token_file = _metrics_token_file(tmp_path)
+    endpoint = _resolve_metrics(
+        host="localhost", port=9101, token_fd=None, token_file=str(token_file)
+    )
+    assert endpoint is not None
+    assert endpoint.host == "127.0.0.1"
 
 
 def test_the_stats_file_directory_must_exist(tmp_path: Path) -> None:

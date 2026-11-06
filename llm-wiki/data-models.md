@@ -65,7 +65,8 @@ change requires a new `register`.
 `RdvPeer.endpoints` relays the first `MAX_RELAY_ENDPOINTS` (four) advertised
 candidates, in order (decision #40); only a register that carried no endpoint at
 all falls back to the observed source. Each relayed `host` is guaranteed dialable
-by `hsync_common.endpoint.is_valid_endpoint_host`, and the whole response stays
+by `hsync_common.endpoint.is_valid_endpoint_host` (including routable IP
+literals: no loopback/link-local/multicast/reserved), and the whole response stays
 within `MAX_RESPONSE_BYTES`. The requester tries the candidates, preferring a
 host/LAN one reachable from its own network, so two peers behind the same NAT —
 where the public endpoint has no hairpin route — still connect over the local path.

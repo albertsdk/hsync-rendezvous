@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import SecretStr
 
+from hsync_rendezvous import handler as handler_mod
 from hsync_rendezvous.handler import RendezvousConfigError, RendezvousHandler
 from hsync_rendezvous.tokens import derive_bucket_token
 
@@ -45,6 +46,21 @@ def make_handler(
         private=private,
         group_keys={bucket: SecretStr(key) for bucket, key in keys.items()},
     )
+
+
+def test_open_bucket_still_runs_the_constant_time_compare(monkeypatch):
+    """The open path performs the same compare, so timing does not reveal gating."""
+    h = make_handler()
+    calls: list[int] = []
+    real = handler_mod.constant_time_equals
+
+    def spy(left: bytes, right: bytes) -> bool:
+        calls.append(1)
+        return real(left, right)
+
+    monkeypatch.setattr(handler_mod, "constant_time_equals", spy)
+    assert h._authorize("open-bucket", None, "203.0.113.7") == "ok"
+    assert len(calls) == 1
 
 
 @contextmanager

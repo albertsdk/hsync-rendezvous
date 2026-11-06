@@ -1012,7 +1012,12 @@ def _resolve_metrics(
             "HTTP and only listens on 127.0.0.1 or ::1 (front it with a proxy or an "
             "SSH tunnel instead)"
         )
-    return MetricsEndpoint(host=host, port=port, token=SecretStr(_read_token(token_fd, token_file)))
+    # Bind a literal, not a name: the later start_server must not re-resolve a
+    # poisoned hosts/resolver entry and move the plain-HTTP endpoint off loopback.
+    bind_host = "127.0.0.1" if host.strip().lower() == "localhost" else host
+    return MetricsEndpoint(
+        host=bind_host, port=port, token=SecretStr(_read_token(token_fd, token_file))
+    )
 
 
 def _metrics_display(endpoint: MetricsEndpoint | None) -> str:

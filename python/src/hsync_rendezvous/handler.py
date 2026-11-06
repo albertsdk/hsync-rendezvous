@@ -718,13 +718,17 @@ class RendezvousHandler:
         time on the same 64-byte shapes whether or not the bucket has a key, so
         timing does not reveal the provisioned set either.
         """
-        if not (self._private or bucket in self._protected):
-            return "ok"
+        # Always run the same constant-time comparison, even for an open bucket:
+        # otherwise the presence/absence of the compare itself reveals whether a
+        # bucket is token-gated (the refusal text is already uniform).
+        gated = self._private or bucket in self._protected
         expected = self._tokens.get(bucket)
         provided_valid = token is not None and is_valid_bucket_token(token)
         candidate = token if provided_valid and token is not None else _DUMMY_TOKEN
         reference = expected if expected is not None else _DUMMY_TOKEN
         matched = constant_time_equals(reference.encode("ascii"), candidate.encode("ascii"))
+        if not gated:
+            return "ok"
         if expected is not None and provided_valid and matched:
             return "ok"
         # Failed authorization: same uniform answer, same per-IP budget. On a

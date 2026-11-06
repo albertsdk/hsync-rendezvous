@@ -204,20 +204,41 @@ def load_identity(path: str | Path) -> NodeIdentity:
     return _load_identity_file(identity_path)
 
 
-def _parse_identity_file(identity_path: Path) -> tuple[x509.Certificate, PrivateKey]:
-    """Parse a combined cert+key PEM file, checking structure only.
+_MAX_IDENTITY_BYTES = 64 * 1024
 
-    Verifies the file holds a PEM certificate and an unencrypted PKCS#8 ECDSA
-    private key and returns them. It does NOT check that the key matches the
-    certificate (that is :func:`_load_identity_file`'s job) and does not touch
-    permissions, so it is safe to call on a file that is about to be replaced
-    (``identity rotate``). A malformed PEM raises :class:`IdentityError`, never
-    a raw ``ValueError``.
-    """
+
+def _open_identity_fd(identity_path: Path) -> int:
+    """Open the identity file without following a symlink; require a regular file."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        data = identity_path.read_bytes()
+        fd = os.open(identity_path, flags)
     except OSError as exc:
         raise IdentityError(f"could not read identity file {identity_path}: {exc}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise IdentityError(f"identity file {identity_path} is not a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_identity_bytes(fd: int, identity_path: Path) -> bytes:
+    """Read the identity payload from *fd*, bounded in size."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(fd, 8192)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > _MAX_IDENTITY_BYTES:
+            raise IdentityError(f"identity file {identity_path} is too large")
+        chunks.append(chunk)
+
+
+def _parse_identity_bytes(data: bytes, identity_path: Path) -> tuple[x509.Certificate, PrivateKey]:
+    """Parse a combined cert+key PEM payload, mapping parse errors to IdentityError."""
     try:
         return ssl_utils.parse_identity_pem(data)
     except ssl_utils.IdentityPemMissingError as exc:
@@ -235,6 +256,48 @@ def _parse_identity_file(identity_path: Path) -> tuple[x509.Certificate, Private
         ) from exc
 
 
+def _parse_identity_file(identity_path: Path) -> tuple[x509.Certificate, PrivateKey]:
+    """Parse a combined cert+key PEM file, checking structure only.
+
+    The file is opened once with ``O_NOFOLLOW`` and required to be a regular
+    file, so a symlink (or a swap between check and use) cannot redirect the read.
+    It does NOT check that the key matches the certificate (that is
+    :func:`_load_identity_file`'s job) and does not touch permissions, so it is
+    safe to call on a file that is about to be replaced (``identity rotate``). A
+    malformed PEM raises :class:`IdentityError`, never a raw ``ValueError``.
+    """
+    fd = _open_identity_fd(identity_path)
+    try:
+        data = _read_identity_bytes(fd, identity_path)
+    finally:
+        os.close(fd)
+    return _parse_identity_bytes(data, identity_path)
+
+
+def _harden_identity_fd(fd: int, identity_path: Path, mode: int) -> None:
+    """Re-permission the already-open identity file, warning the operator.
+
+    The mode is changed on the descriptor (``fchmod``), not by path, so the
+    permission fix cannot land on a different inode than the one being read.
+    """
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, _IDENTITY_FILE_MODE)
+        else:  # Windows: no fchmod, and no O_NOFOLLOW-style swap either.
+            os.chmod(identity_path, _IDENTITY_FILE_MODE)
+        warn_event(
+            "identity file permissions hardened",
+            path=str(identity_path),
+            reason=f"mode {oct(mode)} -> 0600",
+        )
+    except OSError as exc:
+        error_event(
+            "identity file permissions could not be hardened",
+            path=str(identity_path),
+            reason=type(exc).__name__,
+        )
+
+
 def _load_identity_file(identity_path: Path) -> NodeIdentity:
     """Parse a combined cert+key PEM file into a :class:`NodeIdentity`.
 
@@ -243,31 +306,25 @@ def _load_identity_file(identity_path: Path) -> NodeIdentity:
     match the certificate (never falls back to a fresh identity, which would
     silently rotate the pinned fingerprint).
 
+    The file is opened once (no symlink, regular file only), hardened through the
+    same descriptor, then parsed from the bytes already read — there is no second
+    path lookup an attacker could redirect.
+
     Unattended daemons need the key readable without a passphrase, so the
     *at-rest* protection is file permission: on load, a group/world-readable
     key file is re-chmodded to 0600 and the operator is warned once (the
     identity is the node's impersonation anchor — a leaked key lets an attacker
     take its fingerprint over).
     """
+    fd = _open_identity_fd(identity_path)
     try:
-        mode = identity_path.stat().st_mode & 0o777
-    except OSError as exc:
-        raise IdentityError(f"could not stat identity file {identity_path}: {exc}") from exc
-    if mode != _IDENTITY_FILE_MODE:
-        try:
-            os.chmod(identity_path, _IDENTITY_FILE_MODE)
-            warn_event(
-                "identity file permissions hardened",
-                path=str(identity_path),
-                reason=f"mode {oct(mode)} -> 0600",
-            )
-        except OSError as exc:
-            error_event(
-                "identity file permissions could not be hardened",
-                path=str(identity_path),
-                reason=type(exc).__name__,
-            )
-    cert, key = _parse_identity_file(identity_path)
+        mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        if mode != _IDENTITY_FILE_MODE:
+            _harden_identity_fd(fd, identity_path, mode)
+        data = _read_identity_bytes(fd, identity_path)
+    finally:
+        os.close(fd)
+    cert, key = _parse_identity_bytes(data, identity_path)
     if not _key_matches_certificate(cert, key):
         raise IdentityError(
             f"identity file {identity_path} private key does not match its certificate "

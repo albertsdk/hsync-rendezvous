@@ -315,3 +315,26 @@ def test_a_created_identity_directory_is_owner_only(tmp_path):
     load_or_create_identity(path, host="127.0.0.1")
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_too_open_identity_is_hardened_on_load(tmp_path):
+    path = tmp_path / "identity.pem"
+    load_or_create_identity(path, host="127.0.0.1")
+    os.chmod(path, 0o644)
+    load_identity(path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics")
+def test_loading_a_symlinked_identity_is_refused(tmp_path):
+    """The identity is opened without following a symlink (read and chmod)."""
+    real = tmp_path / "real.pem"
+    load_or_create_identity(real, host="127.0.0.1")
+    os.chmod(real, 0o644)
+    link = tmp_path / "link.pem"
+    os.symlink(real, link)
+    with pytest.raises(IdentityError, match="could not read identity file"):
+        load_identity(link)
+    # Hardening must not have followed the link and re-permissioned the target.
+    assert stat.S_IMODE(real.stat().st_mode) == 0o644

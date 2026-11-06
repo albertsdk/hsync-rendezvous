@@ -122,7 +122,10 @@ def peer_fragment(record: PeerRecord, model: RdvQuery) -> bytes:
             for (proto, host, port) in record.endpoints[:MAX_RELAY_ENDPOINTS]
         ]
     else:
-        endpoints = [Endpoint(proto=record.proto, host=record.ip, port=record.port)]
+        # The observed source is the node's own observation, not an advertised
+        # value: a same-host client's source is legitimately loopback, so it must
+        # not pass the strict "dialable by a remote peer" grammar.
+        endpoints = [Endpoint.model_construct(proto=record.proto, host=record.ip, port=record.port)]
     peer = RdvPeer(
         cid=record.cid,
         endpoints=endpoints,

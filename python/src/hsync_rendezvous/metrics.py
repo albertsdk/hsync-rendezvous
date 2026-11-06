@@ -44,6 +44,10 @@ _HEADER_TERMINATOR = b"\r\n\r\n"
 _MAX_HEADER_BYTES = 8 * 1024
 _READ_TIMEOUT_SECONDS = 5.0
 _MAX_CONCURRENT = 4
+# Hard accept cap, applied before a byte is read: an unauthenticated flood must
+# not allocate a task and an 8 KiB reader per connection. Higher than the serving
+# cap so a short burst still gets the explicit 503 instead of a bare close.
+_MAX_CONNECTIONS = 4 * _MAX_CONCURRENT
 _RATE_PER_SECOND = 1.0
 _RATE_BURST = 4
 _RATE_KEY = "metrics"
@@ -113,7 +117,7 @@ class MetricsServer:
         self._server: asyncio.Server | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._limiter = TokenBucketLimiter(
-            capacity=_RATE_BURST, refill=_RATE_PER_SECOND, window=1.0
+            capacity=_RATE_BURST, refill=_RATE_PER_SECOND, window=1.0, max_keys=64
         )
         self._inflight = 0
 
@@ -146,7 +150,14 @@ class MetricsServer:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _spawn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        """Keep the per-connection task alive and cancellable (asyncio forgets it)."""
+        """Keep the per-connection task alive and cancellable (asyncio forgets it).
+
+        The accept cap is enforced **before** a byte is read: an unauthenticated
+        flood must not allocate a task and an 8 KiB reader per connection.
+        """
+        if len(self._tasks) >= _MAX_CONNECTIONS:
+            writer.close()
+            return
         task = asyncio.create_task(self._handle(reader, writer))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -166,8 +177,13 @@ class MetricsServer:
                 request = await self._read_request(reader)
                 if self._inflight > _MAX_CONCURRENT:
                     raise _Refusal(503, "unavailable", b"service unavailable\n")
-                if not self._limiter.allow(_RATE_KEY):
-                    retry = max(1, self._limiter.retry_after(_RATE_KEY))
+                # Pre-auth budget per source: one local user (or the proxy's
+                # loopback source) must not drain the bucket the legitimate
+                # scraper needs. ``max_keys`` bounds the bucket map.
+                peer = writer.get_extra_info("peername")
+                rate_key = f"metrics:{peer[0]}" if peer else _RATE_KEY
+                if not self._limiter.allow(rate_key):
+                    retry = max(1, self._limiter.retry_after(rate_key))
                     raise _Refusal(
                         429,
                         "rate_limited",

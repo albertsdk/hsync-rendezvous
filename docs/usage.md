@@ -30,7 +30,7 @@ hsync-rendezvous --version
 | `--public-host` | *(none)* | Public hostname or IP to add to the certificate SAN (repeatable). |
 | `--protected-bucket` | *(none)* | Bucket that requires a valid `bucket_token`. Repeat the flag once per bucket (`--protected-bucket shared --protected-bucket home`). The group-keys file may carry more buckets than declared; each **declared** bucket must have its key provisioned or startup fails fast (exit code 2). Buckets not declared stay open unless `--private` gates them all. |
 | `--keys-fd` | *(none)* | File descriptor carrying the group keys (see below). Environment variable form: `HSYNC_RENDEZVOUS_KEYS_FD`. |
-| `--keys-file` | *(none)* | File carrying the group keys (same `bucket=<hex-key>` format); read once at startup and never written. Portable alternative to `--keys-fd` for service managers that cannot pass a descriptor (Windows/WinSW); the two are mutually exclusive. A missing/non-regular file or a symlink is a configuration error (exit code 2); on POSIX a group-writable or world-accessible file is reported on the always-on warning channel (0640 group-read is accepted). Environment variable form: `HSYNC_RENDEZVOUS_KEYS_FILE`. |
+| `--keys-file` | *(none)* | File carrying the group keys (same `bucket=<hex-key>` format); read once at startup and never written. Portable alternative to `--keys-fd` for service managers that cannot pass a descriptor (Windows/WinSW); the two are mutually exclusive. A missing/non-regular file or a symlink is a configuration error (exit code 2); on POSIX a group-writable or world-accessible file is reported on the always-on warning channel (0640 group-read is accepted only when the group is dedicated to the service). Environment variable form: `HSYNC_RENDEZVOUS_KEYS_FILE`. |
 | `--private` | *(disabled flag)* | Private node: every frame must carry a valid `bucket_token`, for **every** bucket (not only `--protected-bucket`). Starting it with no group key fails fast (exit code 2). Environment variable form: `HSYNC_RENDEZVOUS_PRIVATE=1`. |
 | `--upnp` | *(disabled flag)* | Map the listener port(s) with UPnP for **both** transports (UDP for QUIC and TCP for TLS/TCP; opt-in, off by default). With `--listen-ports`, every bound port is mapped on both protocols, so each offered door is also reachable from the WAN side. |
 | `--relay` / `--no-relay` | *(enabled)* | Relay the peers' opaque bytes (`rdv/1` relay frames), so two peers that no inbound NAT mapping reaches can still run their data plane through this node. **On by default**; `--no-relay` disables it. Without the relay the node answers every relay frame with `relay_unavailable` and only directly reachable peers connect. Relaying spends the node's uplink, which is why the aggregate rate and the other bounds below stay in force. The node never terminates or inspects the relayed payload. Environment variable form: `HSYNC_RENDEZVOUS_RELAY=0` disables, `=1` forces. |
@@ -134,7 +134,8 @@ fast with a configuration error instead of stalling startup. `--keys-fd` and
 
 For `--keys-file`, the path must be a regular file (a symlink is refused),
 a group-writable or world-accessible file is reported on the always-on warning
-channel (0640 group-read is accepted), and the operator may delete the file
+channel (0640 group-read is accepted only when the group is dedicated to the
+service), and the operator may delete the file
 after startup (the node keeps the keys in memory; restarting requires the file
 again).
 

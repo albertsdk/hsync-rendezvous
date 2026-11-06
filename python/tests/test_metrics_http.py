@@ -11,12 +11,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import socket
 from collections.abc import AsyncIterator
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import SecretStr
 
-from hsync_rendezvous.metrics import PROMETHEUS_CONTENT_TYPE, MetricsEndpoint, MetricsServer
+from hsync_rendezvous.metrics import (
+    _MAX_CONNECTIONS,
+    PROMETHEUS_CONTENT_TYPE,
+    MetricsEndpoint,
+    MetricsServer,
+)
 from hsync_rendezvous.stats import NodeStats
 
 TOKEN = "0f" * 32
@@ -37,9 +44,10 @@ async def _running() -> AsyncIterator[tuple[MetricsServer, int, NodeStats]]:
         await server.aclose()
 
 
-async def _roundtrip(port: int, request: str) -> str:
+async def _roundtrip(port: int, request: str, *, local_ip: str | None = None) -> str:
     """Write one request, read the whole response (the server closes after it)."""
-    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    local_addr = (local_ip, 0) if local_ip is not None else None
+    reader, writer = await asyncio.open_connection("127.0.0.1", port, local_addr=local_addr)
     try:
         writer.write(request.encode("latin-1"))
         await writer.drain()
@@ -56,6 +64,27 @@ def _status(response: str) -> int:
 
 def _body(response: str) -> str:
     return response.split("\r\n\r\n", 1)[1]
+
+
+async def test_connections_over_the_accept_cap_are_closed_without_a_read() -> None:
+    """An unauthenticated flood cannot allocate a task/reader per connection."""
+    server = MetricsServer(
+        endpoint=MetricsEndpoint(host="127.0.0.1", port=0, token=SecretStr(TOKEN)),
+        stats=NodeStats(),
+    )
+    blockers = [asyncio.create_task(asyncio.sleep(3600)) for _ in range(_MAX_CONNECTIONS)]
+    server._tasks.update(blockers)
+    reader = MagicMock()
+    writer = MagicMock()
+    try:
+        server._spawn(reader, writer)
+        writer.close.assert_called_once_with()
+        reader.read.assert_not_called()
+        assert len(server._tasks) == _MAX_CONNECTIONS
+    finally:
+        for task in blockers:
+            task.cancel()
+        await asyncio.gather(*blockers, return_exceptions=True)
 
 
 async def test_authorized_scrape_returns_the_prometheus_body() -> None:
@@ -144,6 +173,25 @@ async def test_a_request_burst_is_rate_limited() -> None:
     assert codes[:4] == [200, 200, 200, 200]
     assert codes[4] == 429
     assert "Retry-After: " in statuses[4]
+    assert stats.metrics_requests["rate_limited"] == 1
+
+
+async def test_the_rate_limit_is_per_source() -> None:
+    """One source draining its burst must not starve another source's scrape."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.2", 0))
+    except OSError:
+        pytest.skip("127.0.0.2 loopback alias unavailable on this host")
+    finally:
+        probe.close()
+    request = f"GET /metrics HTTP/1.1\r\n{_AUTH}\r\n\r\n"
+    async with _running() as (_, port, stats):
+        first = [_status(await _roundtrip(port, request, local_ip="127.0.0.1")) for _ in range(5)]
+        second = _status(await _roundtrip(port, request, local_ip="127.0.0.2"))
+    assert first[:4] == [200, 200, 200, 200]
+    assert first[4] == 429
+    assert second == 200
     assert stats.metrics_requests["rate_limited"] == 1
 
 

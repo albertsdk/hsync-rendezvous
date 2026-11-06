@@ -159,7 +159,8 @@ managers that cannot pass a descriptor (Windows/WinSW); mutually exclusive with
 .BR \-\-keys\-fd .
 The path must be a regular file (a symlink is refused); on POSIX a
 group-writable or world\-accessible file is reported on the always\-on warning
-channel (0640 group\-read is accepted).
+channel (0640 group\-read is accepted only when the group is dedicated to the
+service).
 Env form:
 .BR HSYNC_RENDEZVOUS_KEYS_FILE .
 .TP
