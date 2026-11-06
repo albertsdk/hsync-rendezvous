@@ -28,6 +28,9 @@ __all__ = [
     "response_bytes",
 ]
 
+# Pre-encoded once: the response envelope embeds it on every reply.
+_PROTOCOL_VERSION_BYTES = PROTOCOL_VERSION_RDV.encode("ascii")
+
 
 def response_bytes(
     *,
@@ -49,7 +52,7 @@ def response_bytes(
     retry_field = b"null" if retry_after is None else str(retry_after).encode("ascii")
     return (
         b'{"protocol_version":"'
-        + PROTOCOL_VERSION_RDV.encode("ascii")
+        + _PROTOCOL_VERSION_BYTES
         + b'","type":"response","peers":['
         + b",".join(peers)
         + b'],"count":'

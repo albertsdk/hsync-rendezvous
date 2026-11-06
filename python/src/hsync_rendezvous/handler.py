@@ -263,7 +263,8 @@ class RendezvousHandler:
         anyway.
         """
         now = time.monotonic()
-        if self._last_prune is None or now - self._last_prune >= self.prune_interval:
+        last = self._last_prune
+        if last is None or now - last >= _PRUNE_INTERVAL_SECONDS:
             self.prune(now, max_remove=REQUEST_PATH_PRUNE_BUDGET)
             self._last_prune = now
 
@@ -397,24 +398,25 @@ class RendezvousHandler:
         # requires ownership of the rendezvous record it opens a relay in (a
         # third party cannot make the node accept a session the record owner
         # never offered).
-        limiter = (
-            self._relay_listen_pair
-            if isinstance(model, RdvRelayListen)
-            else self._relay_connect_pair
-        )
-        refused = self._charge_or_refuse(
-            limiter,
-            f"{peer_ip}|{model.bucket}",
-            event=f"{model.type} rate_limited pair",
-            cid=model.cid,
-            bucket=model.bucket,
-            peer=f"{peer_ip}:{peer_port}",
-            refusal=lambda limiter, key: self._relay_refusal(
-                "rate_limited", limiter.retry_after(key)
-            ),
-        )
-        if refused is not None:
-            return refused
+        if self._enforce_rate_limits:
+            limiter = (
+                self._relay_listen_pair
+                if isinstance(model, RdvRelayListen)
+                else self._relay_connect_pair
+            )
+            refused = self._charge_or_refuse(
+                limiter,
+                f"{peer_ip}|{model.bucket}",
+                event=f"{model.type} rate_limited pair",
+                cid=model.cid,
+                bucket=model.bucket,
+                peer=f"{peer_ip}:{peer_port}",
+                refusal=lambda limiter, key: self._relay_refusal(
+                    "rate_limited", limiter.retry_after(key)
+                ),
+            )
+            if refused is not None:
+                return refused
         if self._authorize(model.bucket, model.bucket_token, peer_ip) != "ok":
             return self._relay_refusal("token_required", None)
         if isinstance(model, RdvRelayListen) and not self._may_replace(
@@ -648,27 +650,30 @@ class RendezvousHandler:
             debug_event("leave removed", cid=model.cid, bucket=model.bucket, peer=peer_ip)
 
     def _query(self, model: RdvQuery, peer_ip: str) -> bytes:
-        pair_key = f"{peer_ip}|{model.bucket}"
-        refused = self._charge_or_refuse(
-            self._query_pair,
-            pair_key,
-            event="query rate_limited pair",
-            bucket=model.bucket,
-            peer=peer_ip,
-        )
-        if refused is not None:
-            return refused
-        # Aggregate per-IP cap across every bucket: one source cannot sweep
-        # the bucket namespace to enumerate the peer population.
-        refused = self._charge_or_refuse(
-            self._query_ip,
-            peer_ip,
-            event="query rate_limited ip",
-            bucket=model.bucket,
-            peer=peer_ip,
-        )
-        if refused is not None:
-            return refused
+        # With limits disabled both charges are no-ops (and the pair key is
+        # never needed), so the whole block is skipped on that seam.
+        if self._enforce_rate_limits:
+            pair_key = f"{peer_ip}|{model.bucket}"
+            refused = self._charge_or_refuse(
+                self._query_pair,
+                pair_key,
+                event="query rate_limited pair",
+                bucket=model.bucket,
+                peer=peer_ip,
+            )
+            if refused is not None:
+                return refused
+            # Aggregate per-IP cap across every bucket: one source cannot sweep
+            # the bucket namespace to enumerate the peer population.
+            refused = self._charge_or_refuse(
+                self._query_ip,
+                peer_ip,
+                event="query rate_limited ip",
+                bucket=model.bucket,
+                peer=peer_ip,
+            )
+            if refused is not None:
+                return refused
         refused = self._authorize_or_refuse(
             "query", model.bucket, model.bucket_token, peer_ip, peer_display=peer_ip
         )
@@ -676,20 +681,19 @@ class RendezvousHandler:
             return refused
 
         records = self.routing.sample(model.bucket, model.group, model.limit)
-        to_peer = self._to_peer
-        # Bound the relay in bytes, not only in peer count: a registrant chooses
-        # its own endpoints, so ``limit`` alone would let one query pull tens of
-        # KB per 81-byte request.
+        # Bind the module-level serializer directly (``_to_peer`` is a thin
+        # wrapper): one Python call less per relayed peer. The debug-only cid
+        # list is derived from the first ``len(peers)`` records instead of a
+        # parallel list the hot path never reads.
         budget = MAX_RESPONSE_BYTES - _ENVELOPE_RESERVE_BYTES
         peers: list[bytes] = []
-        relayed: list[PeerRecord] = []
         for record in records:
-            fragment = to_peer(record, model)
-            if len(fragment) > budget:
+            fragment = peer_fragment(record, model)
+            size = len(fragment)
+            if size > budget:
                 break
             peers.append(fragment)
-            relayed.append(record)
-            budget -= len(fragment)
+            budget -= size
         if debug_enabled():
             debug_event(
                 "query response",
@@ -697,7 +701,7 @@ class RendezvousHandler:
                 group=model.group,
                 peer=peer_ip,
                 peers=len(peers),
-                cids=[record.cid for record in relayed],
+                cids=[record.cid for record in records[: len(peers)]],
             )
         return self._response(peers=peers, error=None, retry_after=None)
 
@@ -774,17 +778,20 @@ class RendezvousHandler:
         bucket) so a single abusive source cannot exhaust a budget shared with
         every other peer of the bucket.
         """
-        pair_key = f"{peer_ip}|{bucket}"
-        refused = self._charge_or_refuse(
-            limiter,
-            pair_key,
-            event=f"{event} rate_limited pair",
-            cid=cid,
-            bucket=bucket,
-            peer=f"{peer_ip}:{peer_port}",
-        )
-        if refused is not None:
-            return refused
+        # When rate limits are disabled every ``_charge_or_refuse`` is a no-op,
+        # so the (IP, bucket) key string is not built either.
+        if self._enforce_rate_limits:
+            pair_key = f"{peer_ip}|{bucket}"
+            refused = self._charge_or_refuse(
+                limiter,
+                pair_key,
+                event=f"{event} rate_limited pair",
+                cid=cid,
+                bucket=bucket,
+                peer=f"{peer_ip}:{peer_port}",
+            )
+            if refused is not None:
+                return refused
         return self._authorize_or_refuse(
             event, bucket, token, peer_ip, peer_display=f"{peer_ip}:{peer_port}", cid=cid
         )

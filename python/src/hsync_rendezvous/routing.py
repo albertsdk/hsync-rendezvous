@@ -412,14 +412,19 @@ class RoutingTable:
         result: list[PeerRecord] = []
         chosen: set[int] = set()
         budget = max(4 * k, 64)
-        while len(result) < k and len(chosen) < budget:
-            idx = self._randbelow(n)
+        # Bound attribute lookups and the ``len(result)`` builtin out of the
+        # draw loop; ``taken`` mirrors the appended count exactly.
+        randbelow = self._randbelow
+        taken = 0
+        while taken < k and len(chosen) < budget:
+            idx = randbelow(n)
             if idx in chosen:
                 continue
             chosen.add(idx)
             record = records[keys[idx]]
             if now < record.expires_at:
                 result.append(record)
+                taken += 1
         if len(result) < k:
             remaining = self._active_records(keys, now)
             self._shuffle(remaining)
@@ -431,5 +436,8 @@ class RoutingTable:
         if bucket is None:
             return len(self._records)
         if group is None:
-            return sum(1 for r in self._records.values() if r.bucket == bucket)
+            # Exact by construction: ``_per_bucket`` is adjusted on every
+            # insert/remove and rebuilt on mass expiry, so this is O(1) instead
+            # of a full-table scan.
+            return self._per_bucket.get(bucket, 0)
         return len(self._by_group.get((bucket, group), ()))
