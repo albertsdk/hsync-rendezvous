@@ -66,11 +66,12 @@ log-forging via control characters and reply amplification.
 
 The probes are black-box by the same contract as the functional suite (CLI +
 `rdv/1` wire only) and stay skipped in the default run because they send
-deliberately hostile traffic:
+deliberately hostile traffic. `tests/test_bb_rendezvous_security_tcp.py` runs the
+same adversarial probes against the TLS/TCP listener, under the same gate:
 
 ```bash
 cd hsync-rendezvous
-HSYNC_BB_RENDEZVOUS=1 HSYNC_BB_SECURITY=1 python/.venv/bin/python -m pytest -q tests/test_bb_rendezvous_security.py
+HSYNC_BB_RENDEZVOUS=1 HSYNC_BB_SECURITY=1 python/.venv/bin/python -m pytest -q "tests/test_bb_rendezvous_security*.py"
 ```
 
 | Knob | Default | Meaning |
@@ -119,17 +120,24 @@ HSYNC_BB_RENDEZVOUS=1 HSYNC_RENDEZVOUS_BIN=/path/to/hsync-rendezvous \
 
 | Module | Scenarios |
 |---|---|
-| `test_bb_rendezvous_lifecycle.py` | `--version`, fail-fast config, readiness, graceful shutdown (`SIGTERM` idle **and under load**, `SIGINT`), IPv6 `[::1]` listener, debug mode (peer-aware stderr log), port-in-use bind failure (exit 3), `--upnp` banner + serving, invalid `--ttl` fail-fast |
-| `test_bb_rendezvous_register.py` | STUN-echo ack, advertised/observed endpoints, refresh ack, unknown-CID refresh drop, re-register replaces endpoints (upsert), multi-endpoint list relayed in order, refresh never mutates capacity/election, re-register after leave, leave removes across groups, 3-frame pipeline, refresh-after-expiry drop |
+| `test_bb_rendezvous_lifecycle.py` | `--version`, fail-fast config (`--no-udp --no-tcp`, `--listen-port`/`--listen-ports` conflict, duplicate/out-of-range ports, metrics without a token), readiness, graceful shutdown (`SIGTERM` idle **and under load**, `SIGINT`), IPv6 `[::1]` listener, debug mode (peer-aware stderr log), port-in-use bind failure (exit 3), `--upnp` banner + serving, invalid `--ttl` fail-fast |
+| `test_bb_rendezvous_register.py` | STUN-echo ack, advertised/observed endpoints, refresh ack + `connected` update, unknown-CID refresh drop, re-register replaces endpoints (upsert), multi-endpoint list relayed in order, refresh never mutates capacity/election, re-register after leave, leave removes across groups, 3-frame pipeline, refresh-after-expiry drop |
 | `test_bb_rendezvous_query.py` | peer listing, group filter, limit bounds, pipelined frames, capacity + election-advertisement relay, reachable, default sample limit (20), upper bound accepted, bucket scoping, group-less exclusion, same-cid distinct groups |
 | `test_bb_rendezvous_protected_buckets.py` | uniform `token_required`, correct/wrong token, no oracle |
 | `test_bb_rendezvous_private.py` | `--private`/envvar: every bucket gated, unkeyed bucket, gated `leave`, fail-fast without keys, banner |
 | `test_bb_rendezvous_ratelimit.py` | burst → `rate_limited` + `retry_after` (query/register/bad-token) |
 | `test_bb_rendezvous_negative.py` | malformed/unknown/oversized/forbidden frames, partial-frame-then-disconnect, leave, limit out-of-range, malformed token, exact frame-size boundary, wrong field types, endpoints bounds, invalid bucket name, group length, cid length, non-object JSON, leave unknown cid |
 | `test_bb_rendezvous_ttl.py` | TTL expiry convergence, refresh keeps peer alive |
-| `test_bb_rendezvous_security.py` | **opt-in** (`HSYNC_BB_SECURITY=1`): adversarial probes — authz bypass, source spoofing, parser abuse, DoS, wrong ALPN, timing side channel, secret handling, log forging, amplification |
-| `test_bb_rendezvous_metrics.py` | loopback `/metrics`: uniform `401` without/with a wrong token, `200` with it, registered peers move the level and the peak, concurrent connections raise the connection peak, the periodic Prometheus text file, and an exposition that never carries peer identity |
+| `test_bb_rendezvous_identity.py` | persistent identity (stable across restart), `identity rotate` (fingerprint changes), `identity show` (PEM, no key leak), fail-fast on missing file, `--identity`/`--ephemeral` exclusivity |
+| `test_bb_rendezvous_multiport.py` | multi-port best-effort bind, one routing table shared by every port |
+| `test_bb_rendezvous_tcp.py` | **TLS/TCP transport**: register/query/ack (TCP STUN echo + observed-source fallback), pipelined frames, relay over TCP, wrong-ALPN refusal, `--tcp`/`--no-udp`/envvar, bind failure (exit 3), UDP-only refuses TCP |
+| `test_bb_rendezvous_tcp_negative.py` | **TLS/TCP**: the negative/robustness frame suite (malformed/unknown/oversized/non-object/forbidden/boundary/grammar), over TCP |
+| `test_bb_rendezvous_tcp_behaviour.py` | **TLS/TCP**: rate limit, TTL expiry + refresh, protected/private auth, multi-port shared table, IPv6, metrics `transport="tcp"` accounting, and "no plaintext frame is ever parsed" |
+| `test_bb_rendezvous_security.py` | **opt-in** (`HSYNC_BB_SECURITY=1`): adversarial QUIC probes — authz bypass, source spoofing, parser abuse, DoS, wrong ALPN, timing side channel, secret handling, log forging, amplification |
+| `test_bb_rendezvous_security_tcp.py` | **opt-in** (`HSYNC_BB_SECURITY=1`): the same adversarial probes over **TLS/TCP** — parser abuse, single-frame bound, pipelined/enumeration DoS, foreign-source register/leave, log forging, and cleartext bytes never reaching the handler |
+| `test_bb_rendezvous_metrics.py` | loopback `/metrics`: uniform `401` without/with a wrong token, `200` with it, `404` unknown path, `405` non-read method, `HEAD` headers without a body, missing token file fail-fast, registered peers move the level and the peak, concurrent connections raise the connection peak, the periodic Prometheus text file, and an exposition that never carries peer identity |
 | `test_bb_rendezvous_stress.py` | **opt-in** (`HSYNC_BB_STRESS=1`): sustained mixed load, full-bucket rendezvous, rate-limit burst + recovery, garbage storm, TTL sweep under query load, register/leave churn RSS-bound (no leak) |
+| `test_harness_readiness.py` | harness self-test: readiness is keyed on the application PID (not the launcher's), early-exit and timeout are surfaced |
 
 Per-IP rate-limit isolation between *distinct* source IPs is not exercised here
 (loopback forces a single source address); it is covered by the white-box unit

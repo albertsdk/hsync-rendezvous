@@ -10,26 +10,26 @@ carry peer identity (the node is no-log).
 from __future__ import annotations
 
 import asyncio
-import http.client
 import re
 from pathlib import Path
 
 import pytest
-from harness import RdvClient, free_tcp_port, random_cid, register_frame
+from harness import (
+    RdvClient,
+    free_tcp_port,
+    random_cid,
+    register_frame,
+    run_cli,
+    scrape_metrics,
+)
 
 TOKEN = "bb" * 32
 
 
 def _scrape(port: int, token: str | None) -> tuple[int, str]:
     """One GET /metrics; returns the status and the body (headers are not used)."""
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    try:
-        headers = {} if token is None else {"Authorization": f"Bearer {token}"}
-        connection.request("GET", "/metrics", headers=headers)
-        response = connection.getresponse()
-        return response.status, response.read().decode("utf-8")
-    finally:
-        connection.close()
+    status, _headers, body = scrape_metrics(port, token)
+    return status, body
 
 
 def _value(body: str, metric: str) -> float:
@@ -145,3 +145,53 @@ async def test_the_exposition_never_carries_peer_identity(
     assert cid not in body
     assert "127.0.0.1" not in body
     assert bucket not in body
+
+
+def test_an_unknown_path_is_not_found(rendezvous_factory, tmp_path: Path) -> None:
+    # Given: a node with the metrics endpoint enabled
+    _, metrics_port = _start_with_metrics(rendezvous_factory, tmp_path)
+    # When: an authenticated request targets a path other than /metrics
+    status, headers, _ = scrape_metrics(metrics_port, TOKEN, path="/other")
+    # Then: it is refused as not found (no other route is exposed)
+    assert status == 404
+    assert headers.get("Content-Type", "").startswith("text/plain")
+
+
+def test_a_non_read_method_is_not_allowed(rendezvous_factory, tmp_path: Path) -> None:
+    # Given: a node with the metrics endpoint enabled
+    _, metrics_port = _start_with_metrics(rendezvous_factory, tmp_path)
+    # When: an authenticated POST targets /metrics
+    status, headers, _ = scrape_metrics(metrics_port, TOKEN, method="POST")
+    # Then: it is refused and the allowed methods are advertised
+    assert status == 405
+    assert headers.get("Allow") == "GET, HEAD"
+
+
+def test_head_returns_headers_without_a_body(rendezvous_factory, tmp_path: Path) -> None:
+    # Given: a node with the metrics endpoint enabled
+    _, metrics_port = _start_with_metrics(rendezvous_factory, tmp_path)
+    # When: an authenticated HEAD targets /metrics
+    status, headers, body = scrape_metrics(metrics_port, TOKEN, method="HEAD")
+    # Then: the status/metadata match GET but no body is written
+    assert status == 200
+    assert headers.get("Content-Type", "").startswith("text/plain")
+    assert body == ""
+
+
+def test_a_missing_metrics_token_file_fails_fast(tmp_path: Path) -> None:
+    # Given: a node asked to serve metrics with a token file that does not exist
+    result = run_cli(
+        [
+            "run",
+            "--ephemeral",
+            "--listen-port",
+            str(free_tcp_port()),
+            "--metrics-port",
+            str(free_tcp_port()),
+            "--metrics-token-file",
+            str(tmp_path / "absent-token"),
+        ]
+    )
+    # Then: it exits with the configuration-error code and no traceback
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr

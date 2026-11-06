@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import random
@@ -151,6 +152,32 @@ def client_config() -> QuicConfiguration:
 def derive_bucket_token(key: bytes, bucket: str) -> str:
     """Spec §Auth: ``HMAC-SHA256(key, "rdv/1" || bucket)[:32]`` hex (64 chars)."""
     return hmac.new(key, b"rdv/1" + bucket.encode("utf-8"), hashlib.sha256).digest()[:32].hex()
+
+
+def scrape_metrics(
+    port: int,
+    token: str | None,
+    *,
+    method: str = "GET",
+    path: str = "/metrics",
+    host: str = "127.0.0.1",
+    timeout: float = 5.0,
+) -> tuple[int, dict[str, str], str]:
+    """One HTTP request to the loopback ``/metrics`` endpoint.
+
+    Returns ``(status, headers, body)``. The single definition every metrics
+    black-box test scrubs against, so the status/route/method contract is
+    observed identically whether the caller checks auth, routing or exposition.
+    """
+    connection = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+        connection.request(method, path, headers=headers)
+        response = connection.getresponse()
+        body = response.read().decode("utf-8")
+        return response.status, dict(response.getheaders()), body
+    finally:
+        connection.close()
 
 
 def random_cid(rng: random.Random) -> str:
@@ -597,10 +624,18 @@ class RdvTcpClient:
     prove a client offering no/different ALPN is refused.
     """
 
-    def __init__(self, port: int, host: str = "127.0.0.1", *, alpn: str | None = RDV_ALPN) -> None:
+    def __init__(
+        self,
+        port: int,
+        host: str = "127.0.0.1",
+        *,
+        alpn: str | None = RDV_ALPN,
+        local_ip: str | None = None,
+    ) -> None:
         self._port = port
         self._host = host
         self._alpn = alpn
+        self._local_ip = local_ip
 
     def _context(self) -> ssl.SSLContext:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -612,10 +647,29 @@ class RdvTcpClient:
         return context
 
     async def open_connection(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        """Dial one TLS/TCP connection (the caller owns and closes it)."""
+        """Dial one TLS/TCP connection (the caller owns and closes it).
+
+        ``local_ip`` (when set) binds the socket's source address, which the
+        source-spoofing probes need to present a *different* loopback address
+        (127.0.0.2) from the one that registered.
+        """
+        local_addr = (self._local_ip, 0) if self._local_ip is not None else None
         return await asyncio.open_connection(
-            self._host, self._port, ssl=self._context(), server_hostname=self._host
+            self._host,
+            self._port,
+            ssl=self._context(),
+            server_hostname=self._host,
+            local_addr=local_addr,
         )
+
+    async def open_plain_connection(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        """Dial a bare TCP connection with **no** TLS (the plaintext-refusal probe).
+
+        The node performs the TLS handshake before reading any frame, so bytes
+        written here must never be parsed as ``rdv/1`` nor answered.
+        """
+        local_addr = (self._local_ip, 0) if self._local_ip is not None else None
+        return await asyncio.open_connection(self._host, self._port, local_addr=local_addr)
 
     @staticmethod
     async def _close(writer: asyncio.StreamWriter) -> None:

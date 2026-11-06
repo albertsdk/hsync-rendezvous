@@ -80,6 +80,22 @@ async def test_refresh_acks(rendezvous_factory, bucket, rng) -> None:
 
 
 @pytest.mark.asyncio
+async def test_refresh_updates_the_connected_count(rendezvous_factory, bucket, rng) -> None:
+    """A refresh's ``connected`` is persisted and relayed (not the register value)."""
+    # Given: a peer registered with connected=3
+    handle = rendezvous_factory()
+    cid = random_cid(rng)
+    async with RdvClient(handle.port) as client:
+        await client.exchange(register_frame(cid, bucket))
+        # When: a refresh reports connected=9, then a query is sent
+        await client.exchange(refresh_frame(cid, bucket, connected=9))
+        response = await client.exchange(query_frame(bucket))
+    # Then: the relayed "connected" reflects the refresh, not the registration
+    assert response["count"] == 1
+    assert response["peers"][0]["connected"] == 9
+
+
+@pytest.mark.asyncio
 async def test_refresh_unknown_cid_is_dropped(rendezvous_factory, bucket, rng) -> None:
     # Given: a fresh node (no records)
     handle = rendezvous_factory()

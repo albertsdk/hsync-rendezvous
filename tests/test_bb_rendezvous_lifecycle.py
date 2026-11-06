@@ -15,7 +15,7 @@ import socket
 import time
 
 import pytest
-from harness import query_frame, register_frame, run_cli
+from harness import free_duplex_port, free_tcp_port, query_frame, register_frame, run_cli
 
 # Any diagnostic line: "2026-09-30T10:30:45.123Z - hsync-rendezvous[1234] warn: …".
 _LINE_RE = re.compile(
@@ -57,6 +57,68 @@ def test_protected_bucket_without_key_fails_fast() -> None:
     # When: --protected-bucket is set with no group key
     result = run_cli(["run", "--protected-bucket", "shared"])
     # Then: fail-fast configuration error (exit 2)
+    assert result.returncode == 2
+    assert "configuration error" in result.stderr
+
+
+def test_both_transports_disabled_fails_fast() -> None:
+    # When: both per-transport switches are turned off
+    result = run_cli(
+        ["run", "--ephemeral", "--listen-port", str(free_duplex_port()), "--no-udp", "--no-tcp"]
+    )
+    # Then: fail-fast — at least one transport must stay on
+    assert result.returncode == 2
+    assert "configuration error" in result.stderr
+
+
+def test_listen_port_and_listen_ports_are_mutually_exclusive() -> None:
+    # When: both the single-port and the multi-port options are given
+    port = free_duplex_port()
+    result = run_cli(
+        [
+            "run",
+            "--ephemeral",
+            "--listen-port",
+            str(port),
+            "--listen-ports",
+            f"{port},{free_duplex_port()}",
+        ]
+    )
+    # Then: fail-fast on the conflicting selection
+    assert result.returncode == 2
+    assert "mutually exclusive" in result.stderr
+
+
+def test_duplicate_listen_ports_fails_fast() -> None:
+    # When: --listen-ports repeats a port
+    port = free_duplex_port()
+    result = run_cli(["run", "--ephemeral", "--listen-ports", f"{port},{port}"])
+    # Then: fail-fast instead of silently binding one port twice
+    assert result.returncode == 2
+    assert "duplicate" in result.stderr
+
+
+def test_out_of_range_listen_port_fails_fast() -> None:
+    # When: --listen-ports carries a port outside 1..65535
+    result = run_cli(["run", "--ephemeral", "--listen-ports", "0"])
+    # Then: fail-fast configuration error
+    assert result.returncode == 2
+    assert "between 1 and 65535" in result.stderr
+
+
+def test_metrics_port_without_a_token_fails_fast() -> None:
+    # When: the metrics endpoint is enabled with no bearer token configured
+    result = run_cli(
+        [
+            "run",
+            "--ephemeral",
+            "--listen-port",
+            str(free_duplex_port()),
+            "--metrics-port",
+            str(free_tcp_port()),
+        ]
+    )
+    # Then: fail-fast — a metrics port without a token is never served
     assert result.returncode == 2
     assert "configuration error" in result.stderr
 

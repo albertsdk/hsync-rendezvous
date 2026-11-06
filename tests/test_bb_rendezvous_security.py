@@ -436,7 +436,7 @@ async def test_connection_flood_keeps_node_serving(rendezvous_factory, bucket, r
 
 
 @pytest.mark.asyncio
-async def test_wrong_alpn_cannot_reach_boot_frames(rendezvous_factory, rng) -> None:
+async def test_wrong_alpn_cannot_reach_boot_frames(rendezvous_factory, bucket, rng) -> None:
     # Given: a running node advertising only the hsync-rdv/1 ALPN
     handle = rendezvous_factory()
     config = QuicConfiguration(
@@ -454,7 +454,10 @@ async def test_wrong_alpn_cannot_reach_boot_frames(rendezvous_factory, rng) -> N
             assert await _send_expect_silent(protocol, query_frame(random_bucket(rng)))
         finally:
             await _close_raw(transport, protocol)
-    # Then: the node is unaffected
+    # Then: the node is unaffected and still serves the correct ALPN
+    async with RdvClient(handle.port) as client:
+        ack = await client.exchange(register_frame(random_cid(rng), bucket))
+    assert ack["type"] == "ack"
     assert handle.proc.poll() is None
 
 
