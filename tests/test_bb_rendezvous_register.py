@@ -49,7 +49,9 @@ async def test_query_returns_advertised_endpoint(rendezvous_factory, bucket, rng
 
 
 @pytest.mark.asyncio
-async def test_query_falls_back_to_observed_source(rendezvous_factory, bucket, rng) -> None:
+async def test_query_relays_an_endpointless_peer_without_candidates(
+    rendezvous_factory, bucket, rng
+) -> None:
     # Given: a peer that registered with no listen endpoint
     handle = rendezvous_factory()
     cid = random_cid(rng)
@@ -57,12 +59,13 @@ async def test_query_falls_back_to_observed_source(rendezvous_factory, bucket, r
     async with RdvClient(handle.port) as client:
         await client.exchange(register_frame(cid, bucket, endpoints=False))
         response = await client.exchange(query_frame(bucket))
-    # Then: the observed source endpoint is relayed as the fallback endpoint
+    # Then: the peer is relayed with no candidate and reachable=false — the node
+    # knows only its source port, which no other peer could dial
     assert response["type"] == "response"
     assert response["count"] == 1
     peer = response["peers"][0]
-    assert peer["endpoints"][0]["host"] == "127.0.0.1"  # observed loopback source
-    assert peer["endpoints"][0]["proto"] == "udp"
+    assert peer["endpoints"] == []
+    assert peer["reachable"] is False
 
 
 @pytest.mark.asyncio

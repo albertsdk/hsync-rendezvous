@@ -169,16 +169,21 @@ async def test_loopback_register_query_tags_tcp_proto() -> None:
 
 
 @pytest.mark.asyncio
-async def test_endpointless_register_falls_back_to_tcp_observed_source() -> None:
-    """An endpoint-less register relays the observed source tagged ``tcp``."""
+async def test_endpointless_register_is_relayed_without_candidates() -> None:
+    """An endpoint-less register is relayed with no candidate and ``reachable=false``.
+
+    The node knows only the source port of that connection; relaying it would
+    send other peers at a dead endpoint (and, for a same-host client, at a
+    loopback address they can never use).
+    """
     handler = RendezvousHandler(enforce_rate_limits=False)
     server, port, _identity = await start_tcp_server("127.0.0.1", 0, handler)
     try:
         await _exchange(port, _register_frame(endpoints=[]))
         response = await _exchange(port, _query_frame())
-        fallback = response["peers"][0]["endpoints"][0]
-        assert fallback["proto"] == "tcp"
-        assert fallback["host"] == "127.0.0.1"
+        peer = response["peers"][0]
+        assert peer["endpoints"] == []
+        assert peer["reachable"] is False
     finally:
         server.close()
 

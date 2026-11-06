@@ -286,8 +286,7 @@ class RendezvousHandler:
         relay frame returns a :class:`RelayHandoff` instead of bytes: its work
         needs the connection's streams, which this transport-agnostic core does
         not own. ``proto`` is the transport the frame arrived on (``udp`` for
-        QUIC, ``tcp`` for TLS/TCP); it only tags the STUN-echo ``ack`` and the
-        observed-source fallback endpoint of an endpoint-less ``register``.
+        QUIC, ``tcp`` for TLS/TCP); it tags the STUN-echo ``ack``.
         """
         frame = self._parse_frame(raw, peer_ip=peer_ip, peer_port=peer_port)
         if frame is None:
@@ -493,7 +492,7 @@ class RendezvousHandler:
                 )
             return None
 
-        record = PeerRecord.from_register(model, peer_ip=peer_ip, peer_port=peer_port, proto=proto)
+        record = PeerRecord.from_register(model, peer_ip=peer_ip)
         record.touch(self.ttl)
         if not self.routing.upsert(record):
             # Bounded table: reclaim expired entries once, then signal

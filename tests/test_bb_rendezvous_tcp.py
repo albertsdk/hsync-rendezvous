@@ -78,7 +78,7 @@ async def test_tcp_register_ack_carries_tcp_stun_echo(rendezvous_factory, bucket
 
 
 @pytest.mark.asyncio
-async def test_tcp_query_falls_back_to_the_observed_tcp_source(
+async def test_tcp_query_relays_an_endpointless_peer_without_candidates(
     rendezvous_factory, bucket, rng
 ) -> None:
     # Given: a peer that registered over TCP with no listen endpoint
@@ -88,11 +88,11 @@ async def test_tcp_query_falls_back_to_the_observed_tcp_source(
     await client.exchange(register_frame(cid, bucket, endpoints=False))
     # When: a query is sent
     response = await client.exchange(query_frame(bucket))
-    # Then: the observed source is relayed with the transport that registered it
+    # Then: the peer is relayed with no candidate and reachable=false, over TCP too
     assert response["count"] == 1
-    endpoint = response["peers"][0]["endpoints"][0]
-    assert endpoint["proto"] == "tcp"
-    assert endpoint["host"] == "127.0.0.1"
+    peer = response["peers"][0]
+    assert peer["endpoints"] == []
+    assert peer["reachable"] is False
 
 
 @pytest.mark.asyncio

@@ -111,7 +111,7 @@ async def test_query_marks_reachability_by_advertised_endpoint(
     reachable = {p["cid"]: p["reachable"] for p in response["peers"]}
     assert reachable == {cid_master: True, cid_slave: False}
     slave = next(p for p in response["peers"] if p["cid"] == cid_slave)
-    assert slave["endpoints"][0]["proto"] == "udp"
+    assert slave["endpoints"] == []
 
 
 @pytest.mark.asyncio

@@ -58,8 +58,8 @@ identity by certificate pinning). Like `capacity`, a changed value requires a ne
 for a peer that advertised at least one listen endpoint (it can act as a data-plane
 server — a master **or** a read-only seeder). An endpoint-less register (the first
 STUN register) is advertised with `reachable=false` and a single-element
-`endpoints` list carrying its observed source endpoint on the transport that
-delivered the register (`udp` or `tcp`). `refresh` never changes it; a
+**empty** `endpoints` list (the node only knows that peer's source port, not a
+listen port a third party could dial). `refresh` never changes it; a
 change requires a new `register`.
 
 `RdvPeer.endpoints` relays the first `MAX_RELAY_ENDPOINTS` (four) advertised
@@ -106,7 +106,7 @@ excluded from the union: they are never validated on the input path.
 
 | Structure | Location | Role |
 |---|---|---|
-| `PeerRecord` | `python/src/hsync_rendezvous/routing.py::PeerRecord` | RAM-only routing entry keyed `(cid, bucket, group)`; carries `capacity` (advisory hint), `expires_at` (TTL), the advertised endpoints as wire-agnostic `(proto, host, port)` tuples (`EndpointTuple`, `python/src/hsync_rendezvous/routing.py::EndpointTuple`) and a lazily-built cached `wire` fragment (`bytes | None`, the serialized `RdvPeer`) |
+| `PeerRecord` | `python/src/hsync_rendezvous/routing.py::PeerRecord` | RAM-only routing entry keyed `(cid, bucket, group)`; carries the observed source `ip` (record ownership), `capacity` (advisory hint), `expires_at` (TTL), the advertised endpoints as wire-agnostic `(proto, host, port)` tuples (`EndpointTuple`, `python/src/hsync_rendezvous/routing.py::EndpointTuple`) and a lazily-built cached `wire` fragment (`bytes | None`, the serialized `RdvPeer`) |
 | `RoutingTable` | `python/src/hsync_rendezvous/routing.py::RoutingTable` | In-memory registry (`upsert`→`bool`/`remove`/`get`/`prune`/`sample`/`count`/`source_ips`); never persisted, single-thread (no lock: one event loop). `upsert` returns `False` above a host-derived `max_records` ceiling, a `max_records_per_bucket` ceiling (the one a registrant cannot rotate around, since `group` is free-form) or a `max_records_per_group` ceiling (so one sample cannot be saturated), so the handler can apply backpressure. `get` returns only an **active** record, so a TTL lapse frees the key and never revives through `refresh`. Backed by three secondary indexes — `_by_group` (bucket+group → keys, O(1) `sample`), `_by_cid` (cid+bucket → keys, O(1) `remove`), `_pos` (key → list position for O(1) swap-remove) — plus the `_per_bucket` counter. `prune` rebuilds the indexes in bulk when ≥ 50% of records expire, else removes incrementally. |
 | `TokenBucketLimiter` | `hsync-common/hsync_common/ratelimit.py` (re-exported at `python/src/hsync_rendezvous/ratelimit.py`) | Shared in-memory token bucket SSOT (also used by `hsync-client`) for the per-IP/per-(IP, bucket) rate limits; `has_tokens` is a non-consuming peek used by the pre-parse malformed-frame gate; `max_keys` evicts the least-recently-used key on insert and `evict_stale` drops fully-refilled buckets, bounding key-state growth |
 | `ResourceLimits` | `python/src/hsync_rendezvous/resources.py` | Host-derived ceilings (`max_peer_records`, `max_records_per_bucket`, `max_records_per_group`, `max_limiter_keys`, `max_active_connections`, `max_active_connections_per_ip`) from available RAM (the process's own cgroup limit, then `MemAvailable`, then sysconf) and CPU count; `detect()` is read-only/best-effort with a conservative fallback |

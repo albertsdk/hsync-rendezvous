@@ -50,8 +50,6 @@ class PeerRecord:
     bucket: str
     group: str | None
     ip: str
-    port: int
-    proto: BucketProto
     cert_fp: str
     version: str
     endpoints: tuple[EndpointTuple, ...] = ()
@@ -87,25 +85,20 @@ class PeerRecord:
         model: RdvRegister,
         *,
         peer_ip: str,
-        peer_port: int,
-        proto: BucketProto = "udp",
     ) -> PeerRecord:
         """Build a record from a validated ``register`` frame.
 
-        The observed source (``peer_ip``/``peer_port``) is the STUN-echo endpoint;
-        every other field is relayed verbatim from the frame (or its documented
-        default). ``proto`` is the transport the frame arrived on (``udp`` for
-        QUIC, ``tcp`` for TLS/TCP): it is the protocol of the observed-source
-        fallback endpoint an endpoint-less ``register`` is answered with. One
-        projector keeps ``register`` handling in sync with the model.
+        ``peer_ip`` is the observed source address, kept for record ownership:
+        creating, replacing or renewing a record is honoured only from the source
+        network that registered it. Every other field is relayed verbatim from
+        the frame (or its documented default). One projector keeps ``register``
+        handling in sync with the model.
         """
         return cls(
             cid=model.cid,
             bucket=model.bucket,
             group=model.group,
             ip=peer_ip,
-            port=peer_port,
-            proto=proto,
             cert_fp=model.cert_fp,
             version=model.version,
             endpoints=tuple((e.proto, e.host, e.port) for e in model.endpoints),

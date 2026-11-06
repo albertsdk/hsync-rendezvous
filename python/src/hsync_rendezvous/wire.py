@@ -101,14 +101,16 @@ def ack_bytes(
 
 
 def peer_fragment(record: PeerRecord, model: RdvQuery) -> bytes:
-    """Relay the peer's candidate endpoints over the observed source.
+    """Relay the peer's advertised candidate endpoints.
 
     The first :data:`MAX_RELAY_ENDPOINTS` advertised candidates are relayed
-    verbatim and in order; only a register that carried no endpoint at all (the
-    first STUN register) falls back to a single-element list with the observed
-    source endpoint. Both branches share one projection so the relayed advisory
-    fields (``capacity``, ``reachable`` and the election advertisement) cannot
-    drift; the whole record is relayed verbatim and never interpreted.
+    verbatim and in order. A register that advertised none (the first STUN
+    register) is relayed with an empty list and ``reachable=false``: the node
+    knows only the peer's *source* port for that connection, which is not a
+    listen port a third party could dial, so inventing a candidate would only
+    send other peers at a dead endpoint. The advisory fields (``capacity``,
+    ``reachable`` and the election advertisement) share one projection so they
+    cannot drift; the whole record is relayed verbatim and never interpreted.
 
     Returns the pre-serialized JSON fragment (not the ``RdvPeer`` model), so the
     record caches bytes — see ``PeerRecord.wire``.
@@ -116,16 +118,10 @@ def peer_fragment(record: PeerRecord, model: RdvQuery) -> bytes:
     cached = record.wire
     if cached is not None:
         return cached
-    if record.endpoints:
-        endpoints = [
-            Endpoint(proto=proto, host=host, port=port)
-            for (proto, host, port) in record.endpoints[:MAX_RELAY_ENDPOINTS]
-        ]
-    else:
-        # The observed source is the node's own observation, not an advertised
-        # value: a same-host client's source is legitimately loopback, so it must
-        # not pass the strict "dialable by a remote peer" grammar.
-        endpoints = [Endpoint.model_construct(proto=record.proto, host=record.ip, port=record.port)]
+    endpoints = [
+        Endpoint(proto=proto, host=host, port=port)
+        for (proto, host, port) in record.endpoints[:MAX_RELAY_ENDPOINTS]
+    ]
     peer = RdvPeer(
         cid=record.cid,
         endpoints=endpoints,

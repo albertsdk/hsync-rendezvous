@@ -263,7 +263,7 @@ Trade-offs (by design, not defects):
 `register` carries the peer's data-plane endpoint candidates. The node stores
 them and relays the **first four, in order**, on every peer of a `query` response
 (a peer that advertised none is relayed as a single-element list with its
-observed source endpoint), and the whole response stays within a 32 KiB budget.
+empty for a peer that advertised none), and the whole response stays within a 32 KiB budget.
 
 Each advertised `host` must be dialable — an IPv4/IPv6 literal or a DNS name; a
 value outside that grammar (control characters, path separators, empty or

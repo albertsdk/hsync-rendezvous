@@ -322,7 +322,8 @@ class RdvPeer(_StrictModel):
 
     ``endpoints`` is capped at :data:`MAX_RELAY_ENDPOINTS` entries (in the
     peer's advertised order) so one response stays bounded, and each ``host``
-    is guaranteed dialable by the shared grammar.
+    is guaranteed dialable by the shared grammar. A peer that advertised no
+    endpoint is relayed with an empty list and ``reachable=false``.
 
     ``capacity`` is the peer's advisory service-capacity hint as relayed from
     its ``register`` (``0`` = not a seeder). It is not authenticated and not
@@ -337,7 +338,7 @@ class RdvPeer(_StrictModel):
     """
 
     cid: str = Field(pattern=CID_PATTERN)
-    endpoints: list[Endpoint] = Field(min_length=1, max_length=16)
+    endpoints: list[Endpoint] = Field(max_length=16)
     cert_fp: CertificateFingerprint = Field(max_length=256)
     bucket: BucketName
     group: str | None = None

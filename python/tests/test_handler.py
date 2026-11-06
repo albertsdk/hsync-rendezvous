@@ -200,11 +200,10 @@ def test_query_returns_advertised_endpoint_random_sample() -> None:
 def test_query_relays_every_advertised_endpoint_in_order() -> None:
     """The candidate list is relayed verbatim: no hairpin for same-NAT peers.
 
-    Regression for the NAT-hairpin failure: the node used to relay only
-    ``endpoints[0]`` (the public one), so a requester behind the same NAT had no
-    local candidate to fall back to. Every advertised endpoint must survive, in
-    order, including the observed-source fallback for a peer that advertised
-    none.
+    Every advertised endpoint survives, in order, so a requester behind the same
+    NAT can prefer a local candidate over a public one with no hairpin route. A
+    peer that advertised none is relayed with an empty list and
+    ``reachable=false`` (there is nothing a third party could dial).
     """
     h = make_handler()
     send(
@@ -230,7 +229,7 @@ def test_query_relays_every_advertised_endpoint_in_order() -> None:
         {"proto": "tcp", "host": "192.168.1.42", "port": 443},
     ]
     assert relayed[CID]["reachable"] is True
-    assert relayed[CID2]["endpoints"] == [{"proto": "udp", "host": "198.51.100.8", "port": 54322}]
+    assert relayed[CID2]["endpoints"] == []
     assert relayed[CID2]["reachable"] is False
 
 
@@ -392,9 +391,10 @@ def test_reachable_is_derived_from_endpoints() -> None:
     assert response is not None
     reachable = {p["cid"]: p["reachable"] for p in response["peers"]}
     assert reachable == {CID: True, CID2: False}
-    # the endpoint-less peer falls back to its observed source endpoint
+    # the endpoint-less peer is relayed with no candidate at all: the node only
+    # knows its source port, which is not a listen port a third party could dial
     fallback = next(p for p in response["peers"] if p["cid"] == CID2)
-    assert fallback["endpoints"] == [{"proto": "udp", "host": "198.51.100.8", "port": 54322}]
+    assert fallback["endpoints"] == []
     # refresh never flips reachable (the record still advertises no endpoint)
     send(
         h,
@@ -843,8 +843,6 @@ def test_prune_removes_expired_records() -> None:
             bucket="shared",
             group="home",
             ip="10.0.0.1",
-            port=1,
-            proto="udp",
             cert_fp=FP,
             version="1.0.0",
             endpoints=(),
@@ -873,8 +871,6 @@ def test_handle_prunes_periodically() -> None:
                 bucket="shared",
                 group="home",
                 ip=ip,
-                port=1,
-                proto="udp",
                 cert_fp=FP,
                 version="1.0.0",
                 endpoints=(),
@@ -1245,8 +1241,6 @@ def test_pruning_releases_the_bucket_accounting_on_both_paths() -> None:
             bucket="shared",
             group=None,
             ip="10.0.0.1",
-            port=443,
-            proto="tcp",
             cert_fp=FP,
             version="1.0.0",
             endpoints=(),

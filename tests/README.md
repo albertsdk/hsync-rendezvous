@@ -130,7 +130,7 @@ HSYNC_BB_RENDEZVOUS=1 HSYNC_RENDEZVOUS_BIN=/path/to/hsync-rendezvous \
 | `test_bb_rendezvous_ttl.py` | TTL expiry convergence, refresh keeps peer alive |
 | `test_bb_rendezvous_identity.py` | persistent identity (stable across restart), `identity rotate` (fingerprint changes), `identity show` (PEM, no key leak), fail-fast on missing file, `--identity`/`--ephemeral` exclusivity |
 | `test_bb_rendezvous_multiport.py` | multi-port best-effort bind, one routing table shared by every port |
-| `test_bb_rendezvous_tcp.py` | **TLS/TCP transport**: register/query/ack (TCP STUN echo + observed-source fallback), pipelined frames, relay over TCP, wrong-ALPN refusal, `--tcp`/`--no-udp`/envvar, bind failure (exit 3), UDP-only refuses TCP |
+| `test_bb_rendezvous_tcp.py` | **TLS/TCP transport**: register/query/ack (TCP STUN echo; an endpoint-less peer is relayed with no candidates), pipelined frames, relay over TCP, wrong-ALPN refusal, `--tcp`/`--no-udp`/envvar, bind failure (exit 3), UDP-only refuses TCP |
 | `test_bb_rendezvous_tcp_negative.py` | **TLS/TCP**: the negative/robustness frame suite (malformed/unknown/oversized/non-object/forbidden/boundary/grammar), over TCP |
 | `test_bb_rendezvous_tcp_behaviour.py` | **TLS/TCP**: rate limit, TTL expiry + refresh, protected/private auth, multi-port shared table, IPv6, metrics `transport="tcp"` accounting, and "no plaintext frame is ever parsed" |
 | `test_bb_rendezvous_security.py` | **opt-in** (`HSYNC_BB_SECURITY=1`): adversarial QUIC probes — authz bypass, source spoofing, parser abuse, DoS, wrong ALPN, timing side channel, secret handling, log forging, amplification |
