@@ -112,6 +112,21 @@ async def test_one_routing_table_is_shared_by_both_transports(
 
 
 @pytest.mark.asyncio
+async def test_quic_register_is_visible_to_a_tcp_query(rendezvous_factory, bucket, rng) -> None:
+    # Given: a peer registered over QUIC/UDP
+    handle = rendezvous_factory()
+    cid = random_cid(rng)
+    async with RdvClient(handle.port) as udp:
+        await udp.exchange(register_frame(cid, bucket))
+    # When: another client queries over TLS/TCP
+    response = await RdvTcpClient(handle.port).exchange(query_frame(bucket))
+    # Then: the QUIC-registered peer is visible (the table is transport-agnostic,
+    # in both directions — a peer is dialed on its own data plane either way)
+    assert response["count"] == 1
+    assert response["peers"][0]["cid"] == cid
+
+
+@pytest.mark.asyncio
 async def test_tcp_pipelined_frames_are_answered_in_order(rendezvous_factory, bucket, rng) -> None:
     # Given: a fresh node
     handle = rendezvous_factory()
