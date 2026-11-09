@@ -14,7 +14,7 @@
 <service>
   <id>hsync-rendezvous</id>
   <name>HSYNC rendezvous</name>
-  <description>HSYNC P2P rendezvous node (rdv/1, QUIC/UDP 443, no-log)</description>
+  <description>HSYNC P2P rendezvous node (rdv/1, QUIC/UDP and TLS/TCP 443, no-log)</description>
 
   <executable>%BASE%\hsync-rendezvous.exe</executable>
   <arguments>run --listen-host 0.0.0.0 --listen-port 443 --identity %ProgramData%\hsync-rendezvous\identity.pem --keys-file %ProgramData%\hsync-rendezvous\group-keys</arguments>

@@ -16,7 +16,7 @@ keys contract.
 <service>
   <id>hsync-rendezvous</id>
   <name>HSYNC rendezvous</name>
-  <description>HSYNC P2P rendezvous node (rdv/1, QUIC/UDP 443, no-log)</description>
+  <description>HSYNC P2P rendezvous node (rdv/1, QUIC/UDP and TLS/TCP 443, no-log)</description>
 
   <executable>C:\hsync-rendezvous\.venv\Scripts\python.exe</executable>
   <arguments>-m hsync_rendezvous run --listen-host 0.0.0.0 --listen-port 443 --identity C:\ProgramData\hsync-rendezvous\identity.pem</arguments>

@@ -1,5 +1,5 @@
 [Unit]
-Description=HSYNC P2P rendezvous node (rdv/1, QUIC/UDP 443, no-log)
+Description=HSYNC P2P rendezvous node (rdv/1, QUIC/UDP and TLS/TCP 443, no-log)
 Documentation=https://github.com/albertsdk/hsync-rendezvous
 After=network-online.target
 Wants=network-online.target
