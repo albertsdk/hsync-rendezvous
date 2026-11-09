@@ -26,8 +26,13 @@ MAX_STREAM_DATA_BYTES = 4 * MAX_FRAME_BYTES
 # process-wide cap from ResourceLimits); RETRY only stops *amplified* (spoofed)
 # handshakes, so the node needs its own budget — full rationale and sizing in
 # the ConnectionGuard docstring.
+#
+# ``HANDSHAKE_RATE_PER_SECOND`` is the per-source CPU ceiling, so it stays the
+# anti-flood bound; the burst covers a whole NAT umbrella starting at once,
+# because a client opens one connection per exchange and a cold start performs
+# a register plus its query burst back to back.
 HANDSHAKE_RATE_PER_SECOND = 30
-HANDSHAKE_BURST_PER_IP = 100
+HANDSHAKE_BURST_PER_IP = 400
 CONNECTION_ACTIVE_MAX_PER_IP = 256
 
 # One rdv/1 exchange is one bidirectional stream, so a handful of concurrent

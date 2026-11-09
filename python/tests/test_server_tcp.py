@@ -298,6 +298,7 @@ async def test_oversized_frame_closes_the_session() -> None:
             assert await asyncio.wait_for(reader.readline(), 5.0) == b""
         finally:
             writer.close()
+        assert handler.stats.drops["oversized_frame"] == 1
     finally:
         server.close()
 

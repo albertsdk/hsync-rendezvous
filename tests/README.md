@@ -125,7 +125,7 @@ HSYNC_BB_RENDEZVOUS=1 HSYNC_RENDEZVOUS_BIN=/path/to/hsync-rendezvous \
 | `test_bb_rendezvous_query.py` | peer listing, group filter, limit bounds, pipelined frames, capacity + election-advertisement relay, reachable, default sample limit (20), upper bound accepted, bucket scoping, group-less exclusion, same-cid distinct groups |
 | `test_bb_rendezvous_protected_buckets.py` | uniform `token_required`, correct/wrong token, no oracle |
 | `test_bb_rendezvous_private.py` | `--private`/envvar: every bucket gated, unkeyed bucket, gated `leave`, fail-fast without keys, banner |
-| `test_bb_rendezvous_ratelimit.py` | burst → `rate_limited` + `retry_after` (query/register/bad-token) |
+| `test_bb_rendezvous_ratelimit.py` | burst → `rate_limited` + `retry_after` (query/register/bad-token), and the mirror case: two clients on one public address (a household) complete a lease cycle without a refusal |
 | `test_bb_rendezvous_negative.py` | malformed/unknown/oversized/forbidden frames, partial-frame-then-disconnect, leave, limit out-of-range, malformed token, exact frame-size boundary, wrong field types, endpoints bounds, invalid bucket name, group length, cid length, non-object JSON, leave unknown cid |
 | `test_bb_rendezvous_ttl.py` | TTL expiry convergence, refresh keeps peer alive |
 | `test_bb_rendezvous_identity.py` | persistent identity (stable across restart), `identity rotate` (fingerprint changes), `identity show` (PEM, no key leak), fail-fast on missing file, `--identity`/`--ephemeral` exclusivity |
@@ -135,10 +135,12 @@ HSYNC_BB_RENDEZVOUS=1 HSYNC_RENDEZVOUS_BIN=/path/to/hsync-rendezvous \
 | `test_bb_rendezvous_tcp_behaviour.py` | **TLS/TCP**: rate limit, TTL expiry + refresh, protected/private auth, multi-port shared table, IPv6, metrics `transport="tcp"` accounting, and "no plaintext frame is ever parsed" |
 | `test_bb_rendezvous_security.py` | **opt-in** (`HSYNC_BB_SECURITY=1`): adversarial QUIC probes — authz bypass, source spoofing, parser abuse, DoS, wrong ALPN, timing side channel, secret handling, log forging, amplification |
 | `test_bb_rendezvous_security_tcp.py` | **opt-in** (`HSYNC_BB_SECURITY=1`): the same adversarial probes over **TLS/TCP** — parser abuse, single-frame bound, pipelined/enumeration DoS, foreign-source register/leave, log forging, and cleartext bytes never reaching the handler |
-| `test_bb_rendezvous_metrics.py` | loopback `/metrics`: uniform `401` without/with a wrong token, `200` with it, `404` unknown path, `405` non-read method, `HEAD` headers without a body, missing token file fail-fast, registered peers move the level and the peak, concurrent connections raise the connection peak, the periodic Prometheus text file, and an exposition that never carries peer identity |
+| `test_bb_rendezvous_metrics.py` | loopback `/metrics`: uniform `401` without/with a wrong token, `200` with it, `404` unknown path, `405` non-read method, `HEAD` headers without a body, missing token file fail-fast, registered peers move the level and the peak, concurrent connections raise the connection peak, the periodic Prometheus text file, refusal/limit-hit/drop counters by reason (with closed label sets), and an exposition that never carries peer identity |
 | `test_bb_rendezvous_stress.py` | **opt-in** (`HSYNC_BB_STRESS=1`): sustained mixed load, full-bucket rendezvous, rate-limit burst + recovery, garbage storm, TTL sweep under query load, register/leave churn RSS-bound (no leak) |
 | `test_harness_readiness.py` | harness self-test: readiness is keyed on the application PID (not the launcher's), early-exit and timeout are surfaced |
 
 Per-IP rate-limit isolation between *distinct* source IPs is not exercised here
 (loopback forces a single source address); it is covered by the white-box unit
-suite in `python/tests/test_handler.py`.
+suite in `python/tests/test_handler.py`. The opposite case — several clients
+sharing one address, which loopback reproduces exactly — is covered in
+`test_bb_rendezvous_ratelimit.py`.

@@ -42,7 +42,7 @@ from hsync_common.ratelimit import TokenBucket
 
 from hsync_rendezvous.diagnostics import debug_event, debug_log
 from hsync_rendezvous.framing import FrameTooLarge, read_ndjson
-from hsync_rendezvous.protocol import RdvRelayAttach, RdvRelayConnect, RdvRelayListen
+from hsync_rendezvous.protocol import RdvError, RdvRelayAttach, RdvRelayConnect, RdvRelayListen
 from hsync_rendezvous.relay_state import (
     Listener as _Listener,
 )
@@ -234,6 +234,11 @@ class RelayRegistry:
 
     # -- requester -------------------------------------------------------------
 
+    async def _deny(self, writer: Any, error: RdvError) -> None:
+        """Answer one relay refusal and count it (aggregate only, never a peer)."""
+        self.stats.refusal(error)
+        await _refuse(writer, error)
+
     async def _connect(
         self,
         model: RdvRelayConnect,
@@ -245,10 +250,10 @@ class RelayRegistry:
         """Pair the requester with a listener, then pump until either side ends."""
         listener = self._listeners.get((model.target_cid, model.bucket))
         if listener is None:
-            await _refuse(writer, "relay_unavailable")
+            await self._deny(writer, "relay_unavailable")
             return
         if not self._admit(peer_ip, model.bucket):
-            await _refuse(writer, "overloaded")
+            await self._deny(writer, "overloaded")
             return
         relay_id = secrets.token_hex(RELAY_ID_BYTES)
         session = _Pending(
@@ -274,7 +279,7 @@ class RelayRegistry:
                 )
                 await listener.writer.drain()
             except (ConnectionError, TimeoutError, OSError):
-                await _refuse(writer, "relay_unavailable")
+                await self._deny(writer, "relay_unavailable")
                 return
             writer.write(_line(_ok(relay_id)))
             await writer.drain()
@@ -315,6 +320,9 @@ class RelayRegistry:
             or session.listener.peer_ip != peer_ip
             or session.acceptor is not None
         ):
+            # Unmatched, foreign or duplicate attach: the stream closes with no
+            # frame, so it is a counted drop rather than a wire refusal.
+            self.stats.drop("relay_attach_refused")
             _close(writer)
             return
         # The attach matched a pending session, so this connection is bounded by

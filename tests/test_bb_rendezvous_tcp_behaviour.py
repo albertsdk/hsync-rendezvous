@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from harness import (
+    QUERY_PAIR_BURST,
     RdvTcpClient,
     derive_bucket_token,
     free_tcp_port,
@@ -41,7 +42,7 @@ async def test_tcp_query_is_rate_limited_after_burst(rendezvous_factory, bucket)
     handle = rendezvous_factory()
     client = RdvTcpClient(handle.port)
     # When: the (IP, bucket) query limiter is burst to saturation
-    for _ in range(10):
+    for _ in range(QUERY_PAIR_BURST):
         response = await client.exchange(query_frame(bucket))
         assert response.get("error") is None, response
     limited = await client.exchange(query_frame(bucket))

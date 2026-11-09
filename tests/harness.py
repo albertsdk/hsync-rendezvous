@@ -43,6 +43,13 @@ _FP = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:2
 # here so the language-neutral harness never imports the implementation.
 MAX_FRAME_BYTES = 8192
 
+# ``rdv/1`` §Auth burst budgets, for the same reason: the suite asserts the
+# contract every implementation must honour, not one implementation's constants.
+QUERY_PAIR_BURST = 160
+QUERY_IP_BURST = 320
+REGISTER_PAIR_BURST = 80
+BAD_TOKEN_BURST = 60
+
 
 def resolve_bin() -> str:
     """Rendezvous executable path: ``HSYNC_RENDEZVOUS_BIN`` or the Python build."""

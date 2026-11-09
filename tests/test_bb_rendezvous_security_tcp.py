@@ -22,6 +22,8 @@ import socket
 
 import pytest
 from harness import (
+    QUERY_IP_BURST,
+    QUERY_PAIR_BURST,
     RawOutcome,
     RdvTcpClient,
     query_frame,
@@ -103,11 +105,11 @@ async def test_tcp_pipelined_burst_is_throttled_not_fatal(rendezvous_factory, bu
     # Given: a node with rate limits ON
     handle = rendezvous_factory()
     client = RdvTcpClient(handle.port)
-    frames = [query_frame(bucket) for _ in range(100)]
-    # When: 100 queries are pipelined on one TLS/TCP connection
+    frames = [query_frame(bucket) for _ in range(QUERY_PAIR_BURST + 20)]
+    # When: more queries than the (IP, bucket) burst are pipelined on one TLS/TCP connection
     replies = await client.pipeline(frames, timeout=20.0)
     # Then: every reply is well-formed, the burst is throttled, the node survives
-    assert len(replies) == 100
+    assert len(replies) == QUERY_PAIR_BURST + 20
     assert all(reply["type"] == "response" for reply in replies)
     assert any(reply["error"] == "rate_limited" for reply in replies)
     assert handle.proc.poll() is None
@@ -116,12 +118,18 @@ async def test_tcp_pipelined_burst_is_throttled_not_fatal(rendezvous_factory, bu
 @pytest.mark.asyncio
 async def test_tcp_bucket_enumeration_sweep_hits_aggregate_cap(rendezvous_factory, rng) -> None:
     """One query per bucket defeats the pair limiter — the per-IP aggregate must cap it."""
-    # Given: an open node and 45 distinct bucket names
+    # Given: an open node and a fresh bucket name per probe
     handle = rendezvous_factory()
     client = RdvTcpClient(handle.port)
-    names = [random_bucket(rng) for _ in range(45)]
-    # When: every bucket is queried once in a burst
-    replies = [await client.exchange(query_frame(name)) for name in names]
+    # When: distinct buckets are queried one after another, which the
+    # per-(IP, bucket) limiter cannot stop — only the aggregate can. The loop is
+    # bounded well past the burst so refill cannot make it unbounded.
+    replies = []
+    for _ in range(QUERY_IP_BURST + 200):
+        reply = await client.exchange(query_frame(random_bucket(rng)))
+        replies.append(reply)
+        if reply["error"] is not None:
+            break
     # Then: the anti-enumeration aggregate cap trips and the node stays alive
     assert any(reply["error"] == "rate_limited" for reply in replies)
     assert handle.proc.poll() is None

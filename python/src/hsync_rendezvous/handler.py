@@ -44,7 +44,7 @@ from hsync_rendezvous.ratelimit import TokenBucketLimiter
 from hsync_rendezvous.relay import RelayHandoff, RelayQuotas, RelayRegistry
 from hsync_rendezvous.resources import ResourceLimits
 from hsync_rendezvous.routing import DEFAULT_TTL, PeerRecord, RoutingTable
-from hsync_rendezvous.stats import NodeStats
+from hsync_rendezvous.stats import DropReason, LimitName, NodeStats
 from hsync_rendezvous.tokens import (
     constant_time_equals,
     derive_bucket_token,
@@ -57,25 +57,36 @@ __all__ = [
     "RendezvousHandler",
 ]
 
-# Token authorization / spec rate limits (in-memory sliding windows). Budgets
-# are per minute over ``WINDOW_SECONDS`` unless stated otherwise.
-OP_IP_RATE_PER_SECOND = 10.0  # per-IP admission: ~10 req/s, burst 50 (spec)
-OP_IP_BURST = 50
-QUERY_PAIR_LIMIT = 5  # query per (IP, bucket)
-QUERY_PAIR_BURST = 10
-QUERY_IP_LIMIT = 20  # query per IP across every bucket (anti-enumeration)
-QUERY_IP_BURST = 40
-REGISTER_PAIR_LIMIT = 10  # register/refresh per (IP, bucket)
-REGISTER_PAIR_BURST = 10
-RELAY_CONNECT_LIMIT = 5  # relay_connect per (IP, bucket)
-RELAY_CONNECT_BURST = 10
-RELAY_LISTEN_LIMIT = 2  # relay_listen per (IP, bucket): reconnect churn only
-RELAY_LISTEN_BURST = 2
-BAD_TOKEN_IP_LIMIT = 5  # failed-token attempts per IP
-# Malformed/unknown frames: own budget per IP (rationale in handle()); it also
+# Token authorization / spec rate limits (in-memory token buckets). Budgets are
+# per minute over ``WINDOW_SECONDS`` unless stated otherwise. Sizing rules (§Auth
+# of the spec):
+#   * a client opens one connection per exchange, so the per-IP admission never
+#     exceeds the transport guard (``limits.HANDSHAKE_*``);
+#   * a source's query budget stays inside the egress it may pin — 5 query/s is
+#     ~160 KiB/s at the ``MAX_RESPONSE_BYTES`` worst case;
+#   * a bucket may spend at most half of its source's aggregate budget, so one
+#     group cannot starve the other groups behind the same NAT;
+#   * a burst covers a simultaneous start of a whole NAT umbrella, while the
+#     sustained rate stays the per-source anti-abuse ceiling;
+#   * a per-(IP, bucket) budget always serves the fastest cadence a client may
+#     configure, so a correctly configured client is never refused.
+OP_IP_RATE_PER_SECOND = 20.0  # per-IP admission over every valid frame
+OP_IP_BURST = 400
+QUERY_PAIR_LIMIT = 150  # query per (IP, bucket)
+QUERY_PAIR_BURST = 160
+QUERY_IP_LIMIT = 300  # query per IP across every bucket (anti-enumeration)
+QUERY_IP_BURST = 320
+REGISTER_PAIR_LIMIT = 120  # register/refresh per (IP, bucket)
+REGISTER_PAIR_BURST = 80
+RELAY_CONNECT_LIMIT = 60  # relay_connect per (IP, bucket)
+RELAY_CONNECT_BURST = 40
+RELAY_LISTEN_LIMIT = 20  # relay_listen per (IP, bucket): reconnect churn only
+RELAY_LISTEN_BURST = 10
+BAD_TOKEN_IP_LIMIT = 60  # failed-token attempts per IP
+# Malformed/unknown frames: own budget per IP (rationale in _parse_frame); it also
 # gates the parser, so an IP that exhausts it is dropped before parsing.
-PARSE_IP_LIMIT = 30  # invalid frames per IP per minute
-PARSE_IP_BURST = 60
+PARSE_IP_LIMIT = 240  # invalid frames per IP per minute
+PARSE_IP_BURST = 240
 WINDOW_SECONDS = 60.0
 
 # Fallback token compared against when a bucket has no provisioned key, so the
@@ -272,6 +283,15 @@ class RendezvousHandler:
         """Consume one token, or always admit when rate limits are disabled."""
         return not self._enforce_rate_limits or limiter.allow(key)
 
+    def note_drop(self, reason: DropReason) -> None:
+        """Count one frame dropped without a reply.
+
+        Public because the transport owns some of those drops (an oversized frame
+        in ``session.py``); routing every drop through one method keeps the
+        ``hsync_rendezvous_drops_total`` reason set closed.
+        """
+        self.stats.drop(reason)
+
     def handle(
         self,
         raw: bytes | str,
@@ -296,7 +316,7 @@ class RendezvousHandler:
         refused = self._charge_or_refuse(
             self._ops_ip,
             peer_ip,
-            event="rate_limited ip-admission",
+            name="ops_ip",
             peer=f"{peer_ip}:{peer_port}",
         )
         if refused is not None:
@@ -334,6 +354,8 @@ class RendezvousHandler:
         wholesale (the documented anti-abuse trade-off).
         """
         if self._enforce_rate_limits and not self._bad_parse_ip.has_tokens(peer_ip):
+            self.stats.limit_hit("parse_ip")
+            self.note_drop("pre_parse_gate")
             if debug_enabled():
                 debug_event(
                     "drop pre-parse over-budget", peer=f"{peer_ip}:{peer_port}", bytes=len(raw)
@@ -345,6 +367,7 @@ class RendezvousHandler:
             # Charge the budget that gates the check above; the drop stays a
             # silent no-op (no oracle) and invalid frames never drain the
             # VALID-frame per-IP admission.
+            self.note_drop("invalid_frame")
             if self._enforce_rate_limits:
                 self._bad_parse_ip.allow(peer_ip)
             if debug_enabled():
@@ -387,10 +410,13 @@ class RendezvousHandler:
         """
         if not self.relay.enabled:
             if isinstance(model, RdvRelayAttach):
+                self.note_drop("relay_attach_refused")
                 return RelayHandoff(model, authorized=False)
             return self._relay_refusal("relay_unavailable", None)
         if isinstance(model, RdvRelayAttach):
             authorized = self._authorize(model.bucket, model.bucket_token, peer_ip) == "ok"
+            if not authorized:
+                self.note_drop("relay_attach_refused")
             return RelayHandoff(model, authorized=authorized)
         # relay_listen / relay_connect pass through one charge->authorize->handoff
         # flow on their own per-(IP, bucket) budget; relay_listen additionally
@@ -398,15 +424,12 @@ class RendezvousHandler:
         # third party cannot make the node accept a session the record owner
         # never offered).
         if self._enforce_rate_limits:
-            limiter = (
-                self._relay_listen_pair
-                if isinstance(model, RdvRelayListen)
-                else self._relay_connect_pair
-            )
+            listen = isinstance(model, RdvRelayListen)
+            limiter = self._relay_listen_pair if listen else self._relay_connect_pair
             refused = self._charge_or_refuse(
                 limiter,
                 f"{peer_ip}|{model.bucket}",
-                event=f"{model.type} rate_limited pair",
+                name="relay_listen_pair" if listen else "relay_connect_pair",
                 cid=model.cid,
                 bucket=model.bucket,
                 peer=f"{peer_ip}:{peer_port}",
@@ -426,6 +449,7 @@ class RendezvousHandler:
 
     def _relay_refusal(self, error: RdvError, retry_after: int | None) -> bytes:
         """Serialize one uniform ``relay_error`` refusal (no bucket oracle)."""
+        self.stats.refusal(error)
         return RDV_RELAY_ERROR_ADAPTER.dump_json(
             RdvRelayError(
                 protocol_version=PROTOCOL_VERSION_RDV,
@@ -483,6 +507,7 @@ class RendezvousHandler:
             # A foreign source must not overwrite a live registration it does
             # not own (the source-IP ownership rule, like leave): the frame is
             # dropped silently and the existing record survives.
+            self.note_drop("foreign_source")
             if debug_enabled():
                 debug_event(
                     "register dropped foreign-source",
@@ -559,6 +584,7 @@ class RendezvousHandler:
             # A foreign source must not renew someone else's record either;
             # otherwise an attacker's overwrite (or a stale entry) would be kept
             # alive by the victim's own refresh loop.
+            self.note_drop("foreign_source")
             if debug_enabled():
                 debug_event(
                     "refresh dropped foreign-source",
@@ -635,6 +661,7 @@ class RendezvousHandler:
         ):
             source_ip = None
         else:
+            self.note_drop("foreign_source")
             if debug_enabled():
                 debug_event(
                     "leave ignored foreign-source",
@@ -656,7 +683,7 @@ class RendezvousHandler:
             refused = self._charge_or_refuse(
                 self._query_pair,
                 pair_key,
-                event="query rate_limited pair",
+                name="query_pair",
                 bucket=model.bucket,
                 peer=peer_ip,
             )
@@ -667,7 +694,7 @@ class RendezvousHandler:
             refused = self._charge_or_refuse(
                 self._query_ip,
                 peer_ip,
-                event="query rate_limited ip",
+                name="query_ip",
                 bucket=model.bucket,
                 peer=peer_ip,
             )
@@ -734,6 +761,7 @@ class RendezvousHandler:
         # private node a bucket with no key loaded lands here as well.
         if not self._enforce_rate_limits or self._bad_token_ip.allow(peer_ip):
             return "token_required"
+        self.stats.limit_hit("bad_token_ip")
         return "rate_limited"
 
     def _authorize_or_refuse(
@@ -788,7 +816,7 @@ class RendezvousHandler:
             refused = self._charge_or_refuse(
                 limiter,
                 pair_key,
-                event=f"{event} rate_limited pair",
+                name="register_pair",
                 cid=cid,
                 bucket=bucket,
                 peer=f"{peer_ip}:{peer_port}",
@@ -804,7 +832,7 @@ class RendezvousHandler:
         limiter: TokenBucketLimiter,
         key: str,
         *,
-        event: str,
+        name: LimitName,
         peer: str,
         cid: str | None = None,
         bucket: str | None = None,
@@ -812,15 +840,17 @@ class RendezvousHandler:
     ) -> bytes | None:
         """Consume one token from ``limiter``; return the refusal bytes, or ``None``.
 
-        One place owns the shared "charge -> debug -> refuse" shape of the per-IP
-        and per-(IP, bucket) limits, so register, refresh, query, the relay
-        budgets and the admission gate cannot drift. ``refusal`` overrides the
-        uniform ``response`` refusal with the relay's ``relay_error`` line.
+        One place owns the shared "charge -> count -> debug -> refuse" shape of the
+        per-IP and per-(IP, bucket) limits, so register, refresh, query, the relay
+        budgets and the admission gate cannot drift, and the ``limiter`` label of
+        ``hsync_rendezvous_limit_hits_total`` cannot either. ``refusal`` overrides
+        the uniform ``response`` refusal with the relay's ``relay_error`` line.
         """
         if self._limit_ok(limiter, key):
             return None
+        self.stats.limit_hit(name)
         if debug_enabled():
-            debug_event(event, cid=cid, bucket=bucket, peer=peer)
+            debug_event(f"{name} rate_limited", cid=cid, bucket=bucket, peer=peer)
         if refusal is not None:
             return refusal(limiter, key)
         return self._rate_limited(limiter, key)
@@ -844,7 +874,13 @@ class RendezvousHandler:
         error: RdvError | None,
         retry_after: int | None,
     ) -> bytes:
-        """Assemble the response envelope (byte layout lives in ``wire.py``)."""
+        """Assemble the response envelope (byte layout lives in ``wire.py``).
+
+        The one place every ``response`` refusal passes through, so
+        ``hsync_rendezvous_refusals_total`` counts each one exactly once.
+        """
+        if error is not None:
+            self.stats.refusal(error)
         return response_bytes(ttl=self.ttl, peers=peers, error=error, retry_after=retry_after)
 
     def _ack(self, peer_ip: str, peer_port: int, *, proto: BucketProto = "udp") -> bytes:

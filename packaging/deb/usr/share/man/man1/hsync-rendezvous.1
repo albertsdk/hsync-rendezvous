@@ -1,4 +1,4 @@
-.TH HSYNC-RENDEZVOUS 1 "2026-11-01" "hsync-rendezvous 1.1.0" "User Commands"
+.TH HSYNC-RENDEZVOUS 1 "2026-11-09" "hsync-rendezvous 1.1.0" "User Commands"
 .SH NAME
 hsync-rendezvous \- HSYNC P2P rendezvous node (no-log, zero-knowledge)
 .SH SYNOPSIS
@@ -521,7 +521,14 @@ sibling count open connections per transport (labelled
 client opens one connection per exchange and lets it idle out after 30 seconds.
 .B hsync_rendezvous_build_info
 identifies the running build. Peaks are observed when the event happens, never
-sampled, and never decrease; a restart resets them.
+sampled, and never decrease; a restart resets them. Refusals are counted by
+reason (
+.BR hsync_rendezvous_refusals_total ),
+rate-limit refusals by the budget that produced them (
+.BR hsync_rendezvous_limit_hits_total )
+and frames dropped without a reply by reason (
+.BR hsync_rendezvous_drops_total )
+\- so a limit clipping legitimate clients is distinguishable from abuse.
 .SH SIGNALS
 .TP
 .B SIGINT, SIGTERM

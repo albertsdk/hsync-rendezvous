@@ -39,10 +39,11 @@ class ConnectionGuard:
     ceiling is supplied, across every source (each connection may hold up to 128
     QUIC streams, so unbounded connections also mean unbounded idle-task memory).
 
-    Sizing (see the module constants): the handshake budget stays far above
-    what a whole NAT umbrella of legitimate clients can produce — they open a
-    connection per exchange and idle out after 30 s — while a single-IP flood
-    is throttled to at most ``handshake_burst`` new handshakes per second.
+    Sizing (see the module constants): the sustained handshake rate is the CPU a
+    single source may pin, so it stays the anti-flood bound, while the burst
+    absorbs what a whole NAT umbrella produces when it starts at once — clients
+    open a connection per exchange and idle out after 30 s, so the burst is a
+    cold-start property, never a sustained one.
     """
 
     def __init__(

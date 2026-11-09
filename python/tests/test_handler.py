@@ -524,8 +524,10 @@ def test_private_node_refuses_unkeyed_bucket_like_a_wrong_token() -> None:
 
 
 def test_private_node_failed_token_budget_still_applies() -> None:
+    from hsync_rendezvous.handler import BAD_TOKEN_IP_LIMIT
+
     h = make_handler(private=True, keys={"shared": "kshared"})
-    for _ in range(5):  # 5 failed-token attempts/min per IP, same budget
+    for _ in range(BAD_TOKEN_IP_LIMIT):  # the failed-token budget per IP
         resp = decoded(send(h, query_frame(token="0" * 64), peer_ip="10.0.0.7", peer_port=1))
         assert resp is not None and resp["error"] == "token_required"
     resp = decoded(send(h, query_frame(token="0" * 64), peer_ip="10.0.0.7", peer_port=1))
@@ -567,9 +569,11 @@ def test_private_node_without_keys_fails_fast() -> None:
 
 
 def test_query_rate_limited_per_ip_bucket_pair() -> None:
+    from hsync_rendezvous.handler import QUERY_PAIR_BURST
+
     h = make_handler()
     results = []
-    for _ in range(10):  # burst 10 for (IP, bucket)
+    for _ in range(QUERY_PAIR_BURST):
         results.append(decoded(send(h, query_frame(), peer_ip="10.0.0.9", peer_port=1)))
     assert all(r is not None and r["type"] == "response" and r["error"] is None for r in results)
     limited = decoded(send(h, query_frame(), peer_ip="10.0.0.9", peer_port=1))
@@ -584,8 +588,10 @@ def test_query_rate_limited_per_ip_bucket_pair() -> None:
 
 
 def test_register_rate_limited_per_ip_bucket_pair() -> None:
+    from hsync_rendezvous.handler import REGISTER_PAIR_BURST
+
     h = make_handler()
-    for _ in range(10):  # 10/min per (IP, bucket)
+    for _ in range(REGISTER_PAIR_BURST):  # register/refresh per (IP, bucket)
         ack = decoded(send(h, register_frame(cid=CID2), peer_ip="1.1.1.1", peer_port=1))
         assert ack is not None and ack["type"] == "ack"
     response = decoded(send(h, register_frame(cid=CID2), peer_ip="1.1.1.1", peer_port=1))
@@ -596,8 +602,10 @@ def test_register_rate_limited_per_ip_bucket_pair() -> None:
 
 
 def test_bad_token_attempts_rate_limited_per_ip() -> None:
+    from hsync_rendezvous.handler import BAD_TOKEN_IP_LIMIT
+
     h = make_handler(protected=("shared",))
-    for _ in range(5):  # 5 failed-token attempts/min per IP
+    for _ in range(BAD_TOKEN_IP_LIMIT):  # the failed-token budget per IP
         response = decoded(send(h, query_frame(token="0" * 64), peer_ip="10.0.0.5", peer_port=1))
         assert response is not None and response["error"] == "token_required"
     response = decoded(send(h, query_frame(token="0" * 64), peer_ip="10.0.0.5", peer_port=1))
@@ -817,11 +825,122 @@ def test_generic_per_ip_admission_cap() -> None:
     h = make_handler()
     from hsync_rendezvous.handler import OP_IP_BURST
 
+    # ``leave`` frames are charged the aggregate admission budget and nothing
+    # else, so this drains exactly one limiter.
     for _ in range(OP_IP_BURST):
-        send(h, register_frame(cid=CID2), peer_ip="9.9.9.9", peer_port=1)
+        assert send(h, leave_frame(), peer_ip="9.9.9.9", peer_port=1) is None
     response = decoded(send(h, register_frame(cid=CID2), peer_ip="9.9.9.9", peer_port=1))
     assert response is not None
     assert response["error"] == "rate_limited"
+    # The aggregate admission budget is what ran dry, and the counters say so.
+    assert h.stats.limit_hits["ops_ip"] == 1
+    assert h.stats.refusals["rate_limited"] == 1
+
+
+class _Clock:
+    """Deterministic monotonic clock for the rate limiters (no wall-clock waits)."""
+
+    def __init__(self, now: float = 1000.0) -> None:
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def test_a_client_at_the_fastest_cadence_is_never_refused(monkeypatch) -> None:
+    """A lease cadence of one second — the fastest a client may set — always fits.
+
+    One register + one refresh + one query per second for a whole window stays
+    inside both per-(IP, bucket) budgets, so a correctly configured client never
+    sees ``rate_limited`` for polling at its own documented floor.
+    """
+    from hsync_common import ratelimit as ratelimit_mod
+
+    clock = _Clock()
+    monkeypatch.setattr(ratelimit_mod.time, "monotonic", clock.monotonic)
+    h = make_handler()
+    from hsync_rendezvous.handler import WINDOW_SECONDS
+
+    for _ in range(int(WINDOW_SECONDS)):
+        clock.now += 1.0
+        assert decoded(send(h, register_frame(), peer_ip="10.0.0.9", peer_port=1)) is not None
+        assert decoded(send(h, refresh_frame(), peer_ip="10.0.0.9", peer_port=1)) is not None
+        response = decoded(send(h, query_frame(), peer_ip="10.0.0.9", peer_port=1))
+        assert response is not None and response["error"] is None
+    assert h.stats.refusals_total == 0
+
+
+def test_a_nat_umbrella_is_served_without_refusals(monkeypatch) -> None:
+    """A whole household behind one IP shares the budgets and is never refused.
+
+    The cold start is the client's own shape (one register + eight queries) for
+    two groups of twenty clients — forty clients, one public IP — followed by a
+    full window at the client's discovery and lease cadences. The bursts and the
+    aggregate budgets are sized for exactly this, so the node answers no
+    ``rate_limited`` at all.
+    """
+    from hsync_common import ratelimit as ratelimit_mod
+
+    clock = _Clock()
+    monkeypatch.setattr(ratelimit_mod.time, "monotonic", clock.monotonic)
+    h = make_handler()
+    from hsync_rendezvous.handler import WINDOW_SECONDS
+
+    start_burst = 8  # the client's documented cold-start query burst
+    ip = "10.0.0.9"
+    clients = [
+        (f"{bucket[0].upper()}{index:020d}", bucket)
+        for bucket in ("home", "office")
+        for index in range(20)
+    ]
+    for cid, bucket in clients:
+        assert decoded(send(h, register_frame(cid=cid, bucket=bucket), peer_ip=ip, peer_port=1))
+        for _ in range(start_burst):
+            response = decoded(send(h, query_frame(bucket=bucket), peer_ip=ip, peer_port=1))
+            assert response is not None and response["error"] is None
+    # Lease cadence (refresh every 30 s) plus the discovery cadence (a query
+    # every 12 s) for one whole window, driven on the deterministic clock.
+    for second in range(1, int(WINDOW_SECONDS) + 1):
+        clock.now += 1.0
+        for cid, bucket in clients:
+            if second % 30 == 0:
+                assert decoded(
+                    send(h, refresh_frame(cid=cid, bucket=bucket), peer_ip=ip, peer_port=1)
+                )
+            if second % 12 == 0:
+                response = decoded(send(h, query_frame(bucket=bucket), peer_ip=ip, peer_port=1))
+                assert response is not None and response["error"] is None
+    assert h.stats.refusals_total == 0
+    assert sum(h.stats.limit_hits.values()) == 0
+
+
+def test_silent_drops_are_counted_by_reason() -> None:
+    h = make_handler()
+    assert h.handle(b"{oops", peer_ip="10.0.0.9", peer_port=1) is None
+    send(h, register_frame(), peer_ip="10.0.0.1", peer_port=1)
+    # A foreign source cannot overwrite the live record: dropped silently, counted.
+    assert send(h, register_frame(), peer_ip="203.0.113.9", peer_port=1) is None
+    assert h.stats.drops["invalid_frame"] == 1
+    assert h.stats.drops["foreign_source"] == 1
+
+
+def test_the_budgets_are_mutually_consistent() -> None:
+    """The budgets cannot contradict each other (one connection per exchange).
+
+    Every exchange opens a connection, so the frame admission must stay inside
+    the transport guard; a bucket may spend at most half of its source's
+    aggregate; and both per-(IP, bucket) budgets serve the fastest cadence a
+    client may configure (one request per second of the window).
+    """
+    from hsync_rendezvous import handler as h
+    from hsync_rendezvous import limits
+
+    assert h.OP_IP_RATE_PER_SECOND <= limits.HANDSHAKE_RATE_PER_SECOND
+    assert h.OP_IP_BURST <= limits.HANDSHAKE_BURST_PER_IP
+    assert h.QUERY_PAIR_LIMIT * 2 <= h.QUERY_IP_LIMIT
+    assert h.QUERY_PAIR_BURST <= h.QUERY_IP_BURST
+    assert h.QUERY_PAIR_LIMIT >= h.WINDOW_SECONDS
+    assert h.REGISTER_PAIR_LIMIT >= h.WINDOW_SECONDS
 
 
 def test_protected_bucket_without_key_fails_fast() -> None:
@@ -1112,8 +1231,10 @@ def test_token_authorized_source_may_replace_a_protected_record() -> None:
 
 def test_register_limit_is_isolated_per_source_ip() -> None:
     """One source cannot exhaust the registration budget of another in the same bucket."""
+    from hsync_rendezvous.handler import REGISTER_PAIR_BURST
+
     h = make_handler()
-    for _ in range(10):  # burst 10 for (IP, bucket)
+    for _ in range(REGISTER_PAIR_BURST):
         ack = decoded(send(h, register_frame(cid=CID2), peer_ip="1.1.1.1", peer_port=1))
         assert ack is not None and ack["type"] == "ack"
     limited = decoded(send(h, register_frame(cid=CID2), peer_ip="1.1.1.1", peer_port=1))

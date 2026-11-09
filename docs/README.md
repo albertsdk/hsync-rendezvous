@@ -74,13 +74,15 @@ key for a private node). The client side is covered by the
 
 Supervision, readiness and watchdog, log bounds, aggregate metrics, identity
 backup and rotation, upgrades and the external reachability probe:
-[operations.md](operations.md).
+[operations.md](operations.md). What every metric means — and how to tell a
+limit clipping legitimate clients from abuse — is [metrics.md](metrics.md).
 
 ### 5. Reference & internals
 
 | Document | Content |
 |---|---|
-| [usage.md](usage.md) | CLI reference, protected buckets and private nodes, keys provisioning, privacy/security model, signals, metrics and the OS service units |
+| [usage.md](usage.md) | CLI reference, protected buckets and private nodes, keys provisioning, privacy/security model, signals and the OS service units |
+| [metrics.md](metrics.md) | Metric reference: the three sinks, every family with its labels and meaning, capacity planning, PromQL queries and alert rules |
 | [operations.md](operations.md) | Operating how-to: systemd lifecycle, watchdog, log bounds, aggregate metrics, identity backup/rotation, upgrades, reachability probe |
 | [faq.md](faq.md) | Operational FAQ: certificate pin/TOFU mismatches, stable identity, client-side recovery, signals |
 | `protocol-spec/rdv-1.md` | Wire protocol specification |

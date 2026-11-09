@@ -88,7 +88,10 @@ _RELAY_MEMORY_FRACTION = 0.25
 _MIN_RELAY_SESSIONS = 8
 _MAX_RELAY_SESSIONS = 2_048
 _MIN_RELAY_SESSIONS_PER_IP = 2
-_MAX_RELAY_SESSIONS_PER_IP = 32
+# A relayed session is memory, not policy: the per-IP share only has to keep one
+# listener's fan-out (one attach per relayed peer) out of the global budget, so
+# it follows the host's own session ceiling rather than a fixed client count.
+_MAX_RELAY_SESSIONS_PER_IP = 64
 _MIN_RELAY_SESSIONS_PER_BUCKET = 4
 _MAX_RELAY_SESSIONS_PER_BUCKET = 128
 # One session per this many CPU slots, so a many-core host is not forced to

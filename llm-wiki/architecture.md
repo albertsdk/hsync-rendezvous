@@ -64,7 +64,7 @@ UDP :443 + TCP :443
 | `python/src/hsync_rendezvous/binding.py` | Listener bind errors, the actionability messages for exit codes 3/4, and the shared best-effort bind step for the UDP and TCP transports | `BindError`, `ReadyFileError`, `bind_transport`, `bind_error`, `bind_error_message`, `ready_file_error_message`, `warn_bind_failures` |
 | `python/src/hsync_rendezvous/lifecycle.py` | Periodic duties of a running node: TTL prune, service-manager watchdog, readiness PID file, and STATUS/text-file metric publication | `prune_loop`, `watchdog_loop`, `write_ready_file`, `remove_ready_file`, `write_stats_file`, `stats_loop` |
 | `python/src/hsync_rendezvous/systemd.py` | `sd_notify` sender for the service manager: READY=1 (every requested listener bound), WATCHDOG=1 (fed at half `$WATCHDOG_USEC`), STOPPING=1 (teardown start); honours `$NOTIFY_SOCKET` including the `@` abstract namespace and refuses a ping addressed to another `$WATCHDOG_PID`; inert and exception-free outside systemd (container without systemd, launchd, Windows, foreground) | `notify_ready`, `notify_stopping`, `notify_watchdog`, `watchdog_interval`, `_send` |
-| `python/src/hsync_rendezvous/stats.py` | Peer-free aggregate counters (RAM only, O(1)): connection and registered-peer levels, event-exact peaks with their wall-clock stamp, lifetime counters, relay session/byte aggregates and the closed metrics-outcome list; renders the Prometheus text exposition with a fixed cardinality and no label that could identify a peer (decisions 71) | `NodeStats`, `METRICS_OUTCOMES`, `NodeStats.connections_changed`, `NodeStats.peers_changed`, `NodeStats.relay_session_opened`, `NodeStats.relay_session_closed`, `NodeStats.relay_bytes`, `NodeStats.render_prometheus`, `NodeStats.status_text` |
+| `python/src/hsync_rendezvous/stats.py` | Peer-free aggregate counters (RAM only, O(1)): connection and registered-peer levels, event-exact peaks with their wall-clock stamp, lifetime counters, relay session/byte aggregates, the closed metrics-outcome list and the refusal side of the protocol — refusals by `RdvError` reason, rate-limit refusals by the budget that ran dry, and silent drops by reason (each label set closed); renders the Prometheus text exposition with a fixed cardinality and no label that could identify a peer (decisions 71, 79); the reference for the numbers is `docs/metrics.md` | `NodeStats`, `METRICS_OUTCOMES`, `REFUSAL_REASONS`, `LIMITERS`, `DROP_REASONS`, `NodeStats.refusal`/`limit_hit`/`drop`/`refusals_total`, `NodeStats.render_prometheus`, `NodeStats.status_text` |
 | `python/src/hsync_rendezvous/relay.py` | Data-relay pairing and byte pump (ADR-0047): `RelayRegistry` holds the listener control streams, pairs a requester with the listener of its `target_cid`, and bridges the two streams symmetrically (fixed `RELAY_BUFFER_BYTES` + `drain()` both ways, idle timeout per direction, per-session byte ceiling, `await`-based aggregate bandwidth shaper, attach timeout, host-derived session ceilings); RAM only, aggregate counters only (`--no-relay` makes the node discovery-only) | `RelayRegistry`, `RELAY_BUFFER_BYTES`, `RELAY_ATTACH_TIMEOUT_S`, `RelayRegistry.run`, `RelayRegistry.close` |
 | `python/src/hsync_rendezvous/relay_state.py` | Registry state types: session quotas, the handler's handoff value, listener/pending records, and the prefix-replaying reader used when the handshake line and the first opaque bytes arrive together | `RelayQuotas`, `RelayHandoff`, `Listener`, `Pending`, `PrefixedReader` |
 | `python/src/hsync_rendezvous/relay_wire.py` | Serialization of the relay control frames (`relay_listening`/`relay_incoming`/`relay_ok`/`relay_error`), the ping check, and stream close/refuse | `listening_frame`, `incoming_frame`, `ok_frame`, `error_frame`, `is_ping`, `refuse`, `close_writer` |
@@ -85,18 +85,20 @@ UDP :443 + TCP :443
    (no-log, no oracle); it charges only the malformed-frame budget, never the
    valid-frame admission, so a garbage sender cannot throttle valid neighbours
    behind a shared NAT IP. Only a *valid* frame then charges the generic per-IP
-   admission (~10 req/s, burst 50).
+   admission (`OP_IP_*`).
 3. Type-specific limits (every limiter keyed by source IP): register/refresh
-   10/min per (IP, bucket); query 5/min per (IP, bucket) plus an aggregate
-   20/min per IP across buckets (anti-enumeration). The routing table and the
-   limiter maps are bounded by `ResourceLimits` (host RAM/CPU), so per-IP/bucket
-   churn cannot grow them without limit.
+   per (IP, bucket); query per (IP, bucket) plus an aggregate per IP across
+   buckets (anti-enumeration); relay connect/listen per (IP, bucket). The budgets
+   and the rules they are derived from live in `protocol-spec/rdv-1.md` §Auth and
+   `handler.py` (`QUERY_*`, `REGISTER_PAIR_*`, `RELAY_*`); the routing table and
+   the limiter maps are bounded by `ResourceLimits` (host RAM/CPU), so
+   per-IP/bucket churn cannot grow them without limit.
 4. Protected-bucket check: if the bucket is gated — declared `--protected-bucket` on an open node,
    or *any* bucket on a private node — a constant-time compare decides, running
    on the same 64-byte shapes whether or not the bucket has a key (no timing
-   side-channel on the provisioned set); failures are rate-limited after 5/min
-   per IP and answered uniformly with `token_required` / `rate_limited`
-   (+ `retry_after`).
+   side-channel on the provisioned set); failures are rate-limited after the
+   per-IP failed-token budget and answered uniformly with `token_required` /
+   `rate_limited` (+ `retry_after`).
 5. Mutation: `register` upserts (STUN-echo source `ip:port`) and copies the
    advisory fields onto the record (`capacity`, `reachable`, and the election
    advertisement `server_ready`/`prefer_master`/`never_master`/`inbound`/`startup_time`/
@@ -127,16 +129,18 @@ UDP :443 + TCP :443
 - **Anti-amplification**: QUIC RETRY + address-validation before connection
   state (`start_server(..., retry=True)`, `python/src/hsync_rendezvous/server.py`),
   and a node-side **transport guard** (`ConnectionGuard`,
-  `python/src/hsync_rendezvous/guard.py`): a per-IP handshake budget (~30/s,
-  burst 100), a per-IP cap and a process-wide cap on simultaneously-open
+  `python/src/hsync_rendezvous/guard.py`): a per-IP handshake budget
+  (`limits.HANDSHAKE_RATE_PER_SECOND` / `HANDSHAKE_BURST_PER_IP` — the sustained
+  rate is the per-source CPU bound, the burst absorbs a whole NAT umbrella's cold
+  start), a per-IP cap and a process-wide cap on simultaneously-open
   connections, all sized by `ResourceLimits` from host RAM/CPU, checked in
   `RendezvousQuicProtocol.datagram_received` before any handshake work; released on
   `ConnectionTerminated`, lazily forgetting quiet/empty IPs. QUIC receive windows
   are bounded (≤32 KiB per stream, ≤1 MiB per connection: the connection window
   spans every concurrent relay stream, so it must cover their sum). The guard shares
   the rate-limit seam (`--no-rate-limit`) so benchmarks stay unthrottled.
-- **Malformed-frame budget**: invalid/unknown frames charge a separate ~30/min
-  per IP budget (burst 60, `handler.py` `_bad_parse_ip`), and once an IP exhausts
+- **Malformed-frame budget**: invalid/unknown frames charge a separate per-IP
+  budget (`handler.py` `PARSE_IP_*`, `_bad_parse_ip`), and once an IP exhausts
   it that IP's frames are dropped **before** validation — so a parse storm costs
   no validation CPU — without adding any oracle (the drop stays silent) and
   without draining a NAT neighbour's valid-frame admission.
@@ -170,7 +174,13 @@ UDP :443 + TCP :443
   through the service manager's `STATUS=`, an optional atomically replaced
   Prometheus text file and an optional loopback `/metrics` endpoint that requires
   a bearer token from a systemd credential (decisions 71/72); the always-on
-  stderr channel stays peer-free by construction.
+  stderr channel stays peer-free by construction. Besides levels/peaks and the
+  relay aggregates, the exposition carries the refusal side of the protocol:
+  `hsync_rendezvous_refusals_total{reason}` (what a client sees),
+  `hsync_rendezvous_limit_hits_total{limiter}` (which budget clipped it) and
+  `hsync_rendezvous_drops_total{reason}` (silent drops), so a limit clipping
+  legitimate traffic is distinguishable from abuse. The user-facing reference is
+  `docs/metrics.md`.
 
 ## Target matrix
 

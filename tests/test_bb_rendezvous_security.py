@@ -50,6 +50,9 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import QuicConnection
 from harness import (
+    BAD_TOKEN_BURST,
+    QUERY_IP_BURST,
+    QUERY_PAIR_BURST,
     RawOutcome,
     RdvClient,
     client_config,
@@ -219,10 +222,10 @@ async def test_malformed_token_is_not_charged_as_failed_token(
         )
         assert result.outcome is RawOutcome.SILENT
         # Then: the full failed-token budget is still available afterwards
-        for _ in range(5):
+        for _ in range(BAD_TOKEN_BURST):
             reply = await client.exchange(query_frame(bucket, token="0" * 64))
             assert reply["error"] == "token_required"
-        # And: the 6th wrong attempt (not the malformed one) trips the budget
+        # And: the next wrong attempt (not the malformed one) trips the budget
         reply = await client.exchange(query_frame(bucket, token="0" * 64))
     assert reply["error"] == "rate_limited"
 
@@ -374,12 +377,12 @@ async def test_raw_udp_garbage_is_ignored(rendezvous_factory, bucket, rng) -> No
 async def test_pipelined_burst_is_throttled_not_fatal(rendezvous_factory, bucket) -> None:
     # Given: a node with rate limits ON
     handle = rendezvous_factory()
-    frames = [query_frame(bucket) for _ in range(100)]
+    frames = [query_frame(bucket) for _ in range(QUERY_PAIR_BURST + 20)]
     async with RdvClient(handle.port) as client:
-        # When: 100 queries are pipelined on a single stream
+        # When: more queries than the (IP, bucket) burst are pipelined on a single stream
         replies = await client.pipeline(frames, timeout=15.0)
     # Then: every reply is well-formed, the burst is throttled, the node survives
-    assert len(replies) == 100
+    assert len(replies) == QUERY_PAIR_BURST + 20
     assert all(reply["type"] == "response" for reply in replies)
     assert any(reply["error"] == "rate_limited" for reply in replies)
     assert handle.proc.poll() is None
@@ -388,12 +391,18 @@ async def test_pipelined_burst_is_throttled_not_fatal(rendezvous_factory, bucket
 @pytest.mark.asyncio
 async def test_bucket_enumeration_sweep_hits_aggregate_cap(rendezvous_factory, rng) -> None:
     """One query per bucket defeats the pair limiter — the per-IP aggregate must still cap it."""
-    # Given: an open node and 45 distinct bucket names
+    # Given: an open node and a fresh bucket name per probe
     handle = rendezvous_factory()
-    names = [random_bucket(rng) for _ in range(45)]
     async with RdvClient(handle.port) as client:
-        # When: every bucket is queried once in a burst
-        replies = [await client.exchange(query_frame(name)) for name in names]
+        # When: distinct buckets are queried one after another, which the
+        # per-(IP, bucket) limiter cannot stop — only the aggregate can. The loop
+        # is bounded well past the burst so refill cannot make it unbounded.
+        replies = []
+        for _ in range(QUERY_IP_BURST + 200):
+            reply = await client.exchange(query_frame(random_bucket(rng)))
+            replies.append(reply)
+            if reply["error"] is not None:
+                break
     # Then: the anti-enumeration aggregate cap trips mid-sweep and the node stays alive
     assert any(reply["error"] == "rate_limited" for reply in replies)
     assert handle.proc.poll() is None

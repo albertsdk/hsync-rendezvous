@@ -12,20 +12,35 @@ shorter than any sane sampling interval and a sampled peak would systematically
 under-report it. A peak never decreases and nothing is persisted, so it covers
 the lifetime of the process; long-term history is the monitoring system's job.
 
+The same rule covers the refusal side of the protocol: every refusal the node
+answers is counted by ``RdvError`` reason (what a client sees), every rate-limit
+refusal is additionally counted by the budget that ran dry (which limit clipped
+a source), and every frame dropped without a reply is counted by reason. That
+pair is what tells an operator whether a limit is clipping legitimate traffic and
+which one to re-size; no label ever carries a peer identity.
+
 Consumers: ``hsync_rendezvous.server`` (connection guard), ``hsync_rendezvous.handler``
-(registered peers), ``hsync_rendezvous.metrics`` (exposition) and
-``hsync_rendezvous.cli`` (the periodic sink and the banner).
+(registered peers and refusals), ``hsync_rendezvous.relay`` (relay refusals),
+``hsync_rendezvous.session`` (oversized-frame drops), ``hsync_rendezvous.metrics``
+(exposition) and ``hsync_rendezvous.cli`` (the periodic sink and the banner).
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Literal, get_args
 
 from hsync_rendezvous import __version__
-from hsync_rendezvous.protocol import PROTOCOL_VERSION_RDV
+from hsync_rendezvous.protocol import PROTOCOL_VERSION_RDV, RdvError
 
-__all__ = ["METRICS_OUTCOMES", "NodeStats"]
+__all__ = [
+    "DROP_REASONS",
+    "LIMITERS",
+    "METRICS_OUTCOMES",
+    "NodeStats",
+    "REFUSAL_REASONS",
+]
 
 # Outcomes the metrics endpoint can answer, in exposition order. The set is
 # closed: an unknown outcome is not recorded, so the series cannot grow with
@@ -44,10 +59,59 @@ METRICS_OUTCOMES = (
 # it, so a dashboard or alert never silently loses a series.
 CONNECTION_TRANSPORTS = ("quic", "tcp")
 
+# Refusal reasons are the ``rdv/1`` error domain itself (``RdvError``): deriving
+# the tuple from the type keeps the exposition from drifting away from the wire
+# contract when a reason is added or removed.
+REFUSAL_REASONS: tuple[str, ...] = tuple(get_args(RdvError))
+
+# The node's rate-limit budgets, as ``limiter`` label values: one series per
+# budget tells an operator which limit clipped a source, which is the input
+# capacity planning needs (``refusals_total`` alone only says *that* it did).
+LimitName = Literal[
+    "ops_ip",
+    "query_pair",
+    "query_ip",
+    "register_pair",
+    "relay_connect_pair",
+    "relay_listen_pair",
+    "bad_token_ip",
+    "parse_ip",
+]
+LIMITERS: tuple[str, ...] = tuple(get_args(LimitName))
+
+# Frames the node drops without answering (no oracle): bounded by their own
+# budget instead of a spec error, so they are invisible on the wire and only
+# visible here.
+DropReason = Literal[
+    "invalid_frame",
+    "oversized_frame",
+    "pre_parse_gate",
+    "foreign_source",
+    "relay_attach_refused",
+]
+DROP_REASONS: tuple[str, ...] = tuple(get_args(DropReason))
+
 
 def _prom_escape(value: str) -> str:
     """Escape a Prometheus label value (backslash, double quote, newline)."""
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _render_labelled_counter(
+    name: str,
+    help_text: str,
+    label: str,
+    counts: dict[str, int],
+    values: tuple[str, ...],
+) -> list[str]:
+    """Prometheus lines for one counter family with a closed label set.
+
+    Every value is always rendered, so a scrape never loses a series because it
+    has not been hit yet on this process (a dashboard or alert depends on it).
+    """
+    lines = [f"# HELP {name} {help_text}", f"# TYPE {name} counter"]
+    lines.extend(f'{name}{{{label}="{value}"}} {counts.get(value, 0)}' for value in values)
+    return lines
 
 
 def _render_connection_lines(stats: NodeStats) -> list[str]:
@@ -130,6 +194,13 @@ class NodeStats:
     metrics_requests: dict[str, int] = field(
         default_factory=lambda: dict.fromkeys(METRICS_OUTCOMES, 0)
     )
+    # Refusals the node answered on the wire, by ``RdvError`` reason: the client's
+    # own view of the node (what it saw, not why).
+    refusals: dict[str, int] = field(default_factory=lambda: dict.fromkeys(REFUSAL_REASONS, 0))
+    # Which budget produced a ``rate_limited``: the operator's view of the same
+    # event, and the input for re-sizing a limit.
+    limit_hits: dict[str, int] = field(default_factory=lambda: dict.fromkeys(LIMITERS, 0))
+    drops: dict[str, int] = field(default_factory=lambda: dict.fromkeys(DROP_REASONS, 0))
     stats_write_errors: int = 0
 
     def connections_changed(self, current: int, *, opened: bool = False) -> None:
@@ -170,6 +241,26 @@ class NodeStats:
         if outcome in self.metrics_requests:
             self.metrics_requests[outcome] += 1
 
+    def refusal(self, reason: RdvError) -> None:
+        """Count one refusal frame answered on the wire (closed ``RdvError`` domain)."""
+        if reason in self.refusals:
+            self.refusals[reason] += 1
+
+    def limit_hit(self, limiter: str) -> None:
+        """Count one budget that ran dry (closed ``LIMITERS`` domain)."""
+        if limiter in self.limit_hits:
+            self.limit_hits[limiter] += 1
+
+    def drop(self, reason: str) -> None:
+        """Count one silently dropped frame (closed ``DROP_REASONS`` domain)."""
+        if reason in self.drops:
+            self.drops[reason] += 1
+
+    @property
+    def refusals_total(self) -> int:
+        """Every refusal answered since start (the ``STATUS=`` summary number)."""
+        return sum(self.refusals.values())
+
     def relay_session_opened(self) -> None:
         """Record one relay session starting to relay bytes."""
         self.relay_sessions_current += 1
@@ -198,7 +289,8 @@ class NodeStats:
             f"conn={self.connections_current}/{self.connections_peak} "
             f"quic={quic} tcp={tcp} "
             f"peers={self.peers_current}/{self.peers_peak} "
-            f"relay={self.relay_sessions_current}/{self.relay_sessions_peak}"
+            f"relay={self.relay_sessions_current}/{self.relay_sessions_peak} "
+            f"refused={self.refusals_total}"
         )
 
     def render_prometheus(self) -> str:
@@ -298,6 +390,33 @@ class NodeStats:
             f'hsync_rendezvous_metrics_requests_total{{outcome="{outcome}"}} '
             f"{self.metrics_requests[outcome]}"
             for outcome in METRICS_OUTCOMES
+        )
+        lines.extend(
+            _render_labelled_counter(
+                "hsync_rendezvous_refusals_total",
+                "Refusal frames answered, by reason.",
+                "reason",
+                self.refusals,
+                REFUSAL_REASONS,
+            )
+        )
+        lines.extend(
+            _render_labelled_counter(
+                "hsync_rendezvous_limit_hits_total",
+                "Rate-limit refusals, by the budget that ran dry.",
+                "limiter",
+                self.limit_hits,
+                LIMITERS,
+            )
+        )
+        lines.extend(
+            _render_labelled_counter(
+                "hsync_rendezvous_drops_total",
+                "Frames dropped without a reply, by reason.",
+                "reason",
+                self.drops,
+                DROP_REASONS,
+            )
         )
         lines.extend(
             (

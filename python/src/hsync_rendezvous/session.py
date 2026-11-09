@@ -76,6 +76,7 @@ async def serve_rdv_session(
                 writer.write(response + b"\n")
                 await writer.drain()
     except FrameTooLarge:
+        handler.note_drop("oversized_frame")
         debug_event("drop oversized-frame", peer=peer)
         return  # oversized frame: refuse and close the session silently
     except asyncio.CancelledError:

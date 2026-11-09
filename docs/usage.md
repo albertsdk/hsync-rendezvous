@@ -174,8 +174,8 @@ Notes:
   `HMAC-SHA256(key, "rdv/1" || bucket)[:32]` and send only the derived token
   (64 lowercase hex chars) on `register`/`refresh`/`query`.
 - Wrong or missing tokens are answered uniformly with `token_required` and
-  rate-limited (5/min per IP → `rate_limited` with `retry_after`); the node
-  never reveals whether a bucket exists.
+  rate-limited (a per-IP failed-token budget answers `rate_limited` with
+  `retry_after`); the node never reveals whether a bucket exists.
 
 ## Private node (authenticated rendezvous)
 
@@ -371,9 +371,11 @@ can rely on.
   & pinning". The fingerprint is the same on both transports (one identity), so
   a pin is shared.
 - QUIC `RETRY` + address validation before any connection state is allocated
-  (anti-amplification) and a node-side **transport guard**: about 30 new
-  connections/handshakes per second (burst 100) per source address, plus a per-IP
-  and a process-wide cap on simultaneously-open connections, all enforced before
+  (anti-amplification) and a node-side **transport guard**: a per-source-address
+  budget of new connections/handshakes (a sustained rate that bounds what one
+  source can make the node spend, and a burst that covers a whole network
+  starting at once), plus a per-IP and a process-wide cap on
+  simultaneously-open connections, all enforced before
   any handshake work runs and sized from the host's RAM and CPU. On TLS/TCP the
   admission runs before the TLS handshake **and before any byte is read**, so a
   handshake flood from one IP is refused with no handshake work at all. QUIC
@@ -383,21 +385,25 @@ can rely on.
   per-source floods; a distributed volumetric attack still needs upstream
   mitigation).
 - **Layered in-memory rate limits**, every window keyed by source address so one
-  peer cannot exhaust another's budget: the valid-frame admission (~10 req/s,
-  burst 50), per-`(IP, bucket)` windows for `register`/`refresh` (10/min) and
-  `query` (5/min), an aggregate per-IP `query` cap (20/min, anti-enumeration), the
-  failed-token budget (~5/min per IP) **and a pre-parse budget for
-  malformed/unknown frames** (~30/min per IP, burst 60) so a flood of garbage
-  frames cannot turn frame validation into a CPU-exhaustion channel. Rate-limit
-  refusals are always answered (`rate_limited` + `retry_after`); the silent
-  malformed-frame budget answers nothing (there is no oracle to hand out). The
-  routing table and the limiter tables have host-derived ceilings, globally, per
-  bucket and per bucket/group, so a registration flood is answered with
-  `overloaded` backpressure (`retry_after` advisory) instead of exhausting RAM or
-  saturating a single bucket's sample; the per-bucket ceiling is the one a
-  registrant cannot rotate around, because `group` is chosen by the peer. A
-  `query` response is bounded too (at most four endpoints per peer, 32 KiB per
-  frame), so a registrant cannot turn a small query into a large reply. Every
+  peer cannot exhaust another's budget: a per-IP admission bucket over every
+  valid frame, per-`(IP, bucket)` windows for `register`/`refresh`, `query` and
+  the relay frames, an aggregate per-IP `query` cap (anti-enumeration), the
+  failed-token budget **and a pre-parse budget for malformed/unknown frames** so
+  a flood of garbage frames cannot turn frame validation into a
+  CPU-exhaustion channel. The budgets are sized so a legitimate client is never
+  refused — including a whole home or office behind one public address — while a
+  single source cannot outrun its share; the exact values and the sizing rules
+  they derive from are §Auth of the
+  [protocol specification](../protocol-spec/rdv-1.md). Rate-limit refusals are
+  always answered (`rate_limited` + `retry_after`); the silent malformed-frame
+  budget answers nothing (there is no oracle to hand out). The routing table and
+  the limiter tables have host-derived ceilings, globally, per bucket and per
+  bucket/group, so a registration flood is answered with `overloaded`
+  backpressure (`retry_after` advisory) instead of exhausting RAM or saturating a
+  single bucket's sample; the per-bucket ceiling is the one a registrant cannot
+  rotate around, because `group` is chosen by the peer. A `query` response is
+  bounded too (at most four endpoints per peer, 32 KiB per frame), so a
+  registrant cannot turn a small query into a large reply. Every
   `rdv/1` frame rejects unknown fields, and the deployed units are
   sandboxed (systemd `DynamicUser`, syscall filter).
 - **UPnP is opt-in and hardened**: off by default (`--upnp` enables it). SSDP
@@ -549,58 +555,17 @@ seam for whatever orchestrates the node.
 
 ## Metrics
 
-The node can publish **aggregate** counters — never peer data — on three sinks
-that all report the same numbers: the service manager's `STATUS=` line, an
-optional Prometheus text file, and an optional loopback HTTP endpoint.
+The node publishes aggregate, peer-free counters on three sinks: the systemd
+`STATUS=` line (always on), an optional Prometheus text file (`--stats-file`,
+`--stats-interval`) and an optional loopback `/metrics` endpoint
+(`--metrics-port`, with a mandatory bearer token). All three report the same
+numbers.
 
-| Sink | Enable with | Contract |
-|---|---|---|
-| `systemctl status` | always, under systemd | shows `STATUS=conn=3/57 peers=1203/1240` |
-| Prometheus text file | `--stats-file PATH` | replaced atomically every `--stats-interval` seconds; scrape it with node_exporter's textfile collector |
-| HTTP `/metrics` | `--metrics-port PORT` + a bearer token | loopback only, `GET`/`HEAD` on `/metrics`, `Authorization: Bearer TOKEN` |
-
-The endpoint mirrors the sync server's authenticated `/metrics`: the same path
-(`REST_METRICS_PATH`, `/metrics`), the same Prometheus content type and
-`Authorization: Bearer`, with uniform `401` refusals. The token must be at least
-32 characters and is never echoed or logged; a request without it is refused even
-on loopback, because loopback is not an authorization boundary (every local user,
-a proxy or an SSH tunnel can reach it).
-
-### What the numbers mean
-
-Two populations are reported, and they are **not** the same number.
-
-| Metric | Type | Meaning |
-|---|---|---|
-| `hsync_rendezvous_peers_current` | gauge | **Clients registered right now** (TTL-bounded) |
-| `hsync_rendezvous_peers_peak` | gauge | Highest registered population since the process started |
-| `hsync_rendezvous_peers_peak_timestamp_seconds` | gauge | When that peak was reached |
-| `hsync_rendezvous_peers_updates_total` | counter | Accepted `register`/`refresh` writes |
-| `hsync_rendezvous_peers_expired_total` | counter | Records dropped by the TTL sweep |
-| `hsync_rendezvous_connections_current{transport}` | gauge | Open connections by transport (`quic`, `tcp`) |
-| `hsync_rendezvous_connections_peak{transport}` | gauge | Highest open-connection level per transport since start |
-| `hsync_rendezvous_connections_peak_timestamp_seconds{transport}` | gauge | When that per-transport peak was reached |
-| `hsync_rendezvous_connections_total{transport}` | counter | Connections admitted per transport since start |
-| `hsync_rendezvous_metrics_requests_total{outcome}` | counter | Requests answered by `/metrics` (`ok`, `unauthorized`, `not_found`, `method_not_allowed`, `rate_limited`, `unavailable`) |
-| `hsync_rendezvous_stats_write_errors_total` | counter | Failed stats-file writes |
-| `hsync_rendezvous_build_info{version,protocol}` | gauge | Always `1`; identifies the running build |
-| `hsync_rendezvous_start_time_seconds` | gauge | Unix time the process started |
-
-`peers` is the count of clients online. `connections{transport}` measures handshake
-concurrency instead, because a client opens **one connection per exchange**
-(`register`/`refresh`/`query`) and lets it idle out after 30 s: reporting the
-connections as "clients connected" would be wrong by an order of magnitude.
-
-Both peaks are **event-exact** (observed when a connection is admitted or a record
-changes, never sampled) and never decrease. They cover the lifetime of the
-process, so a restart resets them; use the monitoring system for history. A peak
-can be inflated by churn (short-lived registrations): that is intended, it is what
-capacity planning needs.
-
-The counters are integers in RAM, nothing is persisted, and no label ever carries
-a CID, IP, port or bucket: these are the only numbers the node exposes and they
-keep the no-log invariant. `peers_current` counts records that are not yet swept,
-so it can include entries up to one prune interval (15 s) past their TTL.
+The metric reference — every family, its labels and its meaning, how to read
+`peers` against `connections`, how to tell a limit clipping legitimate clients
+from abuse, capacity planning, PromQL examples and alert rules — is
+[metrics.md](metrics.md). Enabling the sinks and scraping them is
+[operations.md → Measure the node](operations.md#measure-the-node).
 
 ## Deploying as a service
 
@@ -637,7 +602,7 @@ Edit the executable paths inside each unit to the location of your venv.
 | `error: cannot bind the QUIC/UDP listener … — address already in use` (or `the TLS/TCP listener …`) | Another process (or another node instance) is using that port on **every** enabled transport: stop it, pick a free port with `--listen-port`, or disable the conflicting transport (`--no-tcp` if a co-hosted HTTPS server holds TCP 443). A conflict on **one** transport only is skipped best-effort (the node keeps serving the other). |
 | `error: cannot bind the QUIC/UDP listener … — the address is not available` (or `the TLS/TCP listener …`) | `--listen-host` is not a local interface address: use a local IP, or `0.0.0.0` to listen on all of them. |
 | Client gets `token_required` | The bucket is gated (declared `--protected-bucket`, or every bucket on a private node) and the client's derived token is missing/wrong — check the group key on the client side. |
-| Client gets `rate_limited` | A per-source limit was exceeded (per-IP ~10 req/s admission, 5/min failed tokens, 5/min queries per (IP, bucket), 20/min aggregate queries per IP, 10/min registers per (IP, bucket)); wait for `retry_after` seconds — this counts against the source. |
+| Client gets `rate_limited` | A per-source budget was exceeded (per-IP admission, per-`(IP, bucket)` queries/registers/relay frames, the aggregate per-IP query cap, the failed-token or malformed-frame budget — values and sizing rules in §Auth of the [protocol specification](../protocol-spec/rdv-1.md)); wait for `retry_after` seconds — this counts against the source. Which budget it was is in `hsync_rendezvous_limit_hits_total` ([metrics.md](metrics.md)). |
 | Client gets `overloaded` | The node is at its host-derived routing-table ceiling (capacity backpressure, not a client abuse signal); retry after `retry_after` seconds, or prefer another rendezvous. It is not counted against the source. |
 | No UPnP mapping | UPnP is off by default; with `--upnp` a router without IGD or a refused mapping keeps the node running stateless and reports it once on the always-on channel (`warn: upnp no igd on lan port=…` or `warn: upnp mapping unavailable reason=…`); publish a public UDP endpoint in another way or leave UPnP disabled. |
 | `error: cannot write the readiness file …` (exit code 4) | `--ready-file` points at a path the node cannot create (missing parent directory, no permission, or a stale file that `O_EXCL` refuses to overwrite): create/remove the path or point the flag elsewhere. |

@@ -15,8 +15,10 @@ from pathlib import Path
 
 import pytest
 from harness import (
+    QUERY_PAIR_BURST,
     RdvClient,
     free_tcp_port,
+    query_frame,
     random_cid,
     register_frame,
     run_cli,
@@ -36,6 +38,14 @@ def _value(body: str, metric: str) -> float:
     """The single sample value of ``metric`` (asserts it is present exactly once)."""
     matches = re.findall(rf"^{re.escape(metric)} ([0-9.]+)$", body, re.MULTILINE)
     assert len(matches) == 1, f"{metric} not reported once: {matches}"
+    return float(matches[0])
+
+
+def _labelled_value(body: str, metric: str, label: str, value: str) -> float:
+    """The sample value of one ``metric{label="value"}`` series (exactly one)."""
+    sample = f'{metric}{{{label}="{value}"}}'
+    matches = re.findall(rf"^{re.escape(sample)} ([0-9.]+)$", body, re.MULTILINE)
+    assert len(matches) == 1, f"{sample} not reported once: {matches}"
     return float(matches[0])
 
 
@@ -195,3 +205,40 @@ def test_a_missing_metrics_token_file_fails_fast(tmp_path: Path) -> None:
     # Then: it exits with the configuration-error code and no traceback
     assert result.returncode == 2
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_refusals_limit_hits_and_silent_drops_are_reported_by_reason(
+    rendezvous_factory, tmp_path: Path, bucket, rng
+) -> None:
+    """The counters name what happened, and they never carry a peer identity.
+
+    A rate-limited client is visible on the wire, a malformed frame is dropped
+    silently: both are reported here, because an operator needs to tell a limit
+    that clips legitimate traffic (``limit_hits``) from a client that sees a
+    refusal (``refusals``) and from garbage the node discarded (``drops``).
+    """
+    handle, metrics_port = _start_with_metrics(rendezvous_factory, tmp_path)
+    cid = random_cid(rng)
+    async with RdvClient(handle.port) as client:
+        await client.exchange(register_frame(cid, bucket))
+        # Drain the query burst so the next query is refused...
+        for _ in range(QUERY_PAIR_BURST):
+            assert (await client.exchange(query_frame(bucket)))["error"] is None
+        refused = await client.exchange(query_frame(bucket))
+        assert refused["error"] == "rate_limited"
+        # ...and send one malformed frame, which is dropped without a reply.
+        await client.send_raw(b"{oops\n")
+
+    status, body = await asyncio.to_thread(_scrape, metrics_port, TOKEN)
+    assert status == 200
+    assert _labelled_value(body, "hsync_rendezvous_refusals_total", "reason", "rate_limited") >= 1
+    assert _labelled_value(body, "hsync_rendezvous_limit_hits_total", "limiter", "query_pair") >= 1
+    assert _labelled_value(body, "hsync_rendezvous_drops_total", "reason", "invalid_frame") >= 1
+    # The label sets are closed: a series that was never hit is still exposed.
+    assert _labelled_value(body, "hsync_rendezvous_refusals_total", "reason", "token_required") == 0
+    assert (
+        _labelled_value(body, "hsync_rendezvous_limit_hits_total", "limiter", "relay_listen_pair")
+        == 0
+    )
+    assert cid not in body and bucket not in body

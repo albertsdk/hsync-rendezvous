@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 import pytest
 from harness import (
+    QUERY_PAIR_BURST,
     RawOutcome,
     RdvClient,
     leave_frame,
@@ -250,7 +251,7 @@ async def test_rate_limit_burst_recovers(rendezvous_factory, bucket) -> None:
     async with RdvClient(handle.port) as client:
         # When: the query (IP,bucket) limiter is burst to saturation
         limited = None
-        for _ in range(10):
+        for _ in range(QUERY_PAIR_BURST):
             response = await client.exchange(query_frame(bucket))
             assert response.get("error") is None, response
         limited = await client.exchange(query_frame(bucket))

@@ -35,8 +35,11 @@ days and to keep you informed of remediation progress.
   (`--keys-file`, for service managers that cannot pass a descriptor, e.g.
   Windows), never from a path inside the sandbox on POSIX, and the node never
   writes them to disk.
-- **Rate limiting** — in-memory per-IP/bucket sliding windows; over-limit
-  requests receive `rate_limited` with `retry_after`. A node at its host-derived
+- **Rate limiting** — in-memory per-source token buckets, sized so a legitimate
+  client (and a whole home or office behind one address) is never refused
+  (§Auth of `protocol-spec/rdv-1.md`); over-limit requests receive
+  `rate_limited` with `retry_after`, and every refusal is counted so a limit
+  clipping legitimate traffic is distinguishable from abuse (`docs/metrics.md`). A node at its host-derived
   routing-table ceiling answers `overloaded` (capacity backpressure; advisory
   `retry_after`, not counted against the source) instead of mislabelling itself
   as a rate limit.

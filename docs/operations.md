@@ -104,9 +104,9 @@ the monitoring system run the same command directly.
 ## Measure the node
 
 Three sinks report the same aggregates — the metric reference is in
-[usage.md](usage.md#metrics): the systemd `STATUS=` line (always on), a
-Prometheus text file and a loopback `/metrics` endpoint. Enable the last two
-once, in a drop-in.
+[metrics.md](metrics.md): the systemd `STATUS=` line (always on), a Prometheus
+text file and a loopback `/metrics` endpoint. Enable the last two once, in a
+drop-in.
 
 Mint the endpoint's bearer token (its only authorization, at least 32
 characters):
@@ -133,8 +133,8 @@ sudo systemctl restart hsync-rendezvous.service
 systemctl show -p StatusText hsync-rendezvous.service
 ```
 
-`StatusText` carries the live summary (`conn=3/57 peers=1203/1240`), so the
-simplest monitoring needs no extra component.
+`StatusText` carries the live summary (`conn=3/57 peers=1203/1240 refused=12`),
+so the simplest monitoring needs no extra component.
 
 To scrape the endpoint from Prometheus on another host, keep the token in a
 file there and let the scrape read it:
@@ -156,15 +156,8 @@ If you collect with node_exporter instead, skip the `/metrics` flags and point
 its textfile collector at the directory you enabled above
 (`--collector.textfile.directory=/var/lib/hsync-rendezvous`).
 
-Useful queries:
-
-```text
-hsync_rendezvous_peers_current                     # clients online now
-hsync_rendezvous_peers_peak                        # since the last restart
-max_over_time(hsync_rendezvous_peers_current[7d])   # a week-long peak
-rate(hsync_rendezvous_connections_total[5m])        # handshakes per second
-rate(hsync_rendezvous_peers_expired_total[5m])      # churn
-```
+What the numbers mean, the PromQL queries that answer each operational question
+and ready-made alert rules are in [metrics.md](metrics.md#queries-and-alerts).
 
 ## Bound the log
 
