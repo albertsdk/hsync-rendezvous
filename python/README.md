@@ -78,5 +78,4 @@ repository-root [`../compile.sh`](../compile.sh) is the entry point for the
 user-facing artifacts and wraps it: `native` (host standalone),
 `rpi` (Raspberry Pi armhf/arm64) and `deb`/`deb-all`. Protected buckets and keys
 provisioning, service deployment and the full option list:
-[`../docs/usage.md`](../docs/usage.md). Internal architecture:
-[`../llm-wiki/architecture.md`](../llm-wiki/architecture.md).
+[`../docs/usage.md`](../docs/usage.md).

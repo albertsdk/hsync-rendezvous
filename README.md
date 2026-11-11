@@ -145,7 +145,6 @@ clients at the node with the `hsync p2p` rendezvous argument (`hsync p2p <host>`
 | [Metrics reference](docs/metrics.md) | Every aggregate the node exposes, its labels and meaning, capacity planning, PromQL queries and alert rules |
 | [Operations](docs/operations.md) | Supervision, watchdog, log bounds, metric sinks, identity backup/rotation, upgrades, reachability probe |
 | [`rdv/1` specification](protocol-spec/rdv-1.md) | Wire protocol — the single source of truth |
-| [Internal wiki](llm-wiki/README.md) | Architecture, data models, decisions, hard invariants |
 | [Benchmarks](bench/README.md) | L1–L5 measurement scope and methodology |
 | [Black-box suite](tests/README.md) | Language-neutral wire/CLI contract tests |
 | [Contributing](CONTRIBUTING.md) | Development setup, toolchain, tests and contribution guidelines |

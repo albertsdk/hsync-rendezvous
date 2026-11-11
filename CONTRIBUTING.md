@@ -40,7 +40,6 @@ wire change must keep every implementation byte-identical.
 | `c/` | v2 implementation — C11 (planned, not started) |
 | `packaging/` | OS service units (systemd / launchd / WinSW) and the `.deb` payload |
 | `compile.sh` | Root build entry point (`native`/`rpi`/`deb`/`deb-all`, `-l/--language`) |
-| `llm-wiki/` | Internal agent knowledge base |
 | `docs/` | End-user documentation |
 | `AGENTS.md` | Coding rules for AI agents — a useful checklist for humans too |
 
@@ -194,10 +193,7 @@ update the consumers and their parity tests atomically:
 
 ## Documentation
 
-Two sets, both updated within the same change:
-
-- `llm-wiki/` — internal agent knowledge base (architecture, data models, decisions)
-- `docs/` — end-user documentation (welcome page, usage reference)
+The end-user documentation in `docs/` is updated within the same change.
 
 Any user-visible change — CLI flags, `HSYNC_RENDEZVOUS_*` variables, defaults or
 behavior — must also keep these in sync:

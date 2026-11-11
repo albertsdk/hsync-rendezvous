@@ -10,5 +10,4 @@ implementation under `../python/` is the reference and is **complete and stable
 
 Target toolchain: **C11** (`clang` or `gcc`) with `make`. The crate layout is
 this directory with its own `compile.sh` and `Makefile` once the port lands; the
-QUIC/TCP transport stack is chosen together with the port and recorded in
-[`../llm-wiki/decisions.md`](../llm-wiki/decisions.md).
+QUIC/TCP transport stack is chosen together with the port.

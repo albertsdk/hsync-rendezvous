@@ -2,8 +2,7 @@
 opt-in peer-aware debug stream.
 
 The node is **no-log by design**: nothing peer-related is ever written to disk;
-without ``--debug`` no peer data leaves memory at all (invariants and rationale:
-``llm-wiki/README.md``, ``llm-wiki/decisions.md`` #25/#36).
+without ``--debug`` no peer data leaves memory at all.
 
 ``warn_event`` / ``error_event`` — **node health, always emitted** on stderr.
 They accept only the non-identifying field allow-list :data:`_PUBLIC_FIELDS`, so
