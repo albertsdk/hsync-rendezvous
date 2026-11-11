@@ -29,7 +29,7 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
       - name: Checkout hsync-rendezvous
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           path: hsync-rendezvous
 
@@ -37,7 +37,7 @@ jobs:
       # hsync-common is a private repo, so the default GITHUB_TOKEN cannot read
       # it; authenticate with a PAT stored in the HSYNC_COMMON_PAT secret.
       - name: Checkout hsync-common
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           repository: albertsdk/hsync-common
           ref: main
@@ -45,7 +45,7 @@ jobs:
           token: ${{ secrets.HSYNC_COMMON_PAT }}
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
 

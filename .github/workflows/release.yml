@@ -37,19 +37,19 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with: { path: hsync-rendezvous }
       # Path dependency: the Python implementation declares hsync-common as
       # {path = "../../hsync-common"}, so the sibling must be checked out next to
       # this repo; it is checked out with a PAT (this repo's GITHUB_TOKEN is
       # scoped to this repository, not to its sibling).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           repository: albertsdk/hsync-common
           ref: main
           path: hsync-common
           token: ${{ secrets.HSYNC_COMMON_PAT }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with: { python-version: "3.14.9" }
       # Gate the markdown docs on valid relative links, including the cross-repo
       # pointers into the sibling hsync-common checkout (pure stdlib script).
@@ -95,15 +95,15 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with: { path: hsync-rendezvous }
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           repository: albertsdk/hsync-common
           ref: main
           path: hsync-common
           token: ${{ secrets.HSYNC_COMMON_PAT }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with: { python-version: "3.14.9" }
       - run: pipx install poetry==2.4.1
       - name: Determine version
@@ -161,7 +161,7 @@ jobs:
                   "/DWinSWPath=$((Resolve-Path $winsw).Path)" `
                   "/DOutDir=$((Resolve-Path 'release-out').Path)" `
                   "packaging/windows/hsync-rendezvous.iss"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: bin-${{ matrix.target }}
           path: hsync-rendezvous/release-out/*
@@ -170,9 +170,9 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with: { path: hsync-rendezvous }
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           repository: albertsdk/hsync-common
           ref: main
@@ -208,12 +208,12 @@ jobs:
       # acosh/asinh/... -lm) fail with "requires C99 compatible libm" during
       # ./configure.
       - name: Set up QEMU (pinned, known-good)
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@v4.4.0
         with:
           image: tonistiigi/binfmt:qemu-v10.1.3
           platforms: arm,arm64
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v4.4.1
       - name: Build .deb and .rpm packages
         working-directory: hsync-rendezvous
         env:
@@ -221,7 +221,7 @@ jobs:
         run: |
           ./compile.sh --target deb-all
           ./compile.sh --target rpm-all
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: packages
           path: |
@@ -238,17 +238,17 @@ jobs:
       # identity; install.sh verifies against exactly that identity.
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with: { path: hsync-rendezvous }
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           repository: albertsdk/hsync-common
           ref: main
           path: hsync-common
           token: ${{ secrets.HSYNC_COMMON_PAT }}
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-qemu-action@v4.4.0
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -270,14 +270,14 @@ jobs:
           fi
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: hsync-rendezvous/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v3.9.1
       - name: Sign the image (keyless, Sigstore)
         # Sign the digest so every tag pointing at this manifest is covered.
         # install.sh verifies this signature before it starts the node.
@@ -289,7 +289,7 @@ jobs:
     needs: [build-binaries, build-packages, image]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with: { path: hsync-rendezvous }
       - name: Determine release tag
         id: tag
@@ -305,7 +305,7 @@ jobs:
               echo "tag=v${BASE}" >> "$GITHUB_OUTPUT"
             fi
           fi
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: assets
           merge-multiple: true
@@ -354,7 +354,7 @@ jobs:
         run: |
           cd assets
           sha256sum * > SHA256SUMS
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@v3.0.4
         if: github.event_name == 'push' || inputs.create_release
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
