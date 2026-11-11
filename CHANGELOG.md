@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-11
+
 ### Added
 
 - `rdv/1` is served over **TLS/TCP** alongside QUIC/UDP on the same ports, with
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dependency refresh: `typer` 0.29.
 - Connection metrics are labelled by transport
   (`hsync_rendezvous_connections_*{transport="quic"|"tcp"}`), and both series
   are always exposed so a dashboard keeps reporting a disabled transport as 0.
