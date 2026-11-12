@@ -205,33 +205,21 @@ class RendezvousHandler:
             )
 
         max_keys = self.limits.max_limiter_keys
+
+        def limiter(burst: float, limit: float, window: float) -> TokenBucketLimiter:
+            return TokenBucketLimiter(burst, limit, window, max_keys=max_keys)
+
         # Every limiter is bounded in both key population and rate; each one is
         # keyed by source IP (or (IP, bucket)), never by a shared bucket alone,
         # so a single abusive source cannot exhaust a global budget.
-        self._ops_ip = TokenBucketLimiter(
-            OP_IP_BURST, OP_IP_RATE_PER_SECOND, 1.0, max_keys=max_keys
-        )
-        self._query_pair = TokenBucketLimiter(
-            QUERY_PAIR_BURST, QUERY_PAIR_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
-        self._query_ip = TokenBucketLimiter(
-            QUERY_IP_BURST, QUERY_IP_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
-        self._register_pair = TokenBucketLimiter(
-            REGISTER_PAIR_BURST, REGISTER_PAIR_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
-        self._bad_token_ip = TokenBucketLimiter(
-            BAD_TOKEN_IP_LIMIT, BAD_TOKEN_IP_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
-        self._bad_parse_ip = TokenBucketLimiter(
-            PARSE_IP_BURST, PARSE_IP_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
-        self._relay_connect_pair = TokenBucketLimiter(
-            RELAY_CONNECT_BURST, RELAY_CONNECT_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
-        self._relay_listen_pair = TokenBucketLimiter(
-            RELAY_LISTEN_BURST, RELAY_LISTEN_LIMIT, WINDOW_SECONDS, max_keys=max_keys
-        )
+        self._ops_ip = limiter(OP_IP_BURST, OP_IP_RATE_PER_SECOND, 1.0)
+        self._query_pair = limiter(QUERY_PAIR_BURST, QUERY_PAIR_LIMIT, WINDOW_SECONDS)
+        self._query_ip = limiter(QUERY_IP_BURST, QUERY_IP_LIMIT, WINDOW_SECONDS)
+        self._register_pair = limiter(REGISTER_PAIR_BURST, REGISTER_PAIR_LIMIT, WINDOW_SECONDS)
+        self._bad_token_ip = limiter(BAD_TOKEN_IP_LIMIT, BAD_TOKEN_IP_LIMIT, WINDOW_SECONDS)
+        self._bad_parse_ip = limiter(PARSE_IP_BURST, PARSE_IP_LIMIT, WINDOW_SECONDS)
+        self._relay_connect_pair = limiter(RELAY_CONNECT_BURST, RELAY_CONNECT_LIMIT, WINDOW_SECONDS)
+        self._relay_listen_pair = limiter(RELAY_LISTEN_BURST, RELAY_LISTEN_LIMIT, WINDOW_SECONDS)
         # The relay is on by default: only a node started with ``--no-relay``
         # answers every relay frame with ``relay_unavailable`` and creates no
         # relay state.
