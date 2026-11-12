@@ -501,7 +501,7 @@ ssh = ["bcrypt (>=3.1.5)"]
 
 [[package]]
 name = "hsync-common"
-version = "1.1.0"
+version = "1.1.1"
 description = "HSYNC Common - shared models, constants, and compression utilities"
 optional = false
 python-versions = ">=3.12,<3.15"
@@ -1613,4 +1613,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.15"
-content-hash = "5aba5892dbd03e5cf8c219f913ca48a64fcbf25454b2126fea8d2016a8da94c6"
+content-hash = "48d0e0a86999c2bfe20877038725b4ddc2000e50f4a496cc7a068367bceab957"
