@@ -357,8 +357,9 @@ jobs:
       - uses: softprops/action-gh-release@v3.0.4
         if: github.event_name == 'push' || inputs.create_release
         with:
+          # No target_commitish: the tag already points at the release commit,
+          # and a bare commit SHA is rejected with 403 once main moves past it.
           tag_name: ${{ steps.tag.outputs.tag }}
-          target_commitish: ${{ github.sha }}
           files: assets/*
           generate_release_notes: true
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
