@@ -4,4 +4,4 @@ No-log, in-memory, zero-knowledge "matchmaker" for the ``rdv/1`` wire protocol.
 See ``protocol-spec/rdv-1.md`` at the repository root (single source of truth).
 """
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
