@@ -32,7 +32,6 @@ __all__ = [
 ]
 
 _MIB = 1024 * 1024
-_GIB = 1024 * _MIB
 
 # Conservative estimate of one live peer entry: the record, its cached wire
 # fragment, the (cid, bucket, group) key and the three index entries. Measured

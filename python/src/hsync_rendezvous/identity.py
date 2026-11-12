@@ -37,10 +37,9 @@ __all__ = [
 # HSYNC service identities are always ECDSA P-256 (ADR-0037).
 PrivateKey = ec.EllipticCurvePrivateKey
 
-# Identity file/dir permissions: a long-lived private key must not be
+# Identity file permissions: a long-lived private key must not be
 # world-readable (shared service-identity model, ADR-0037).
 _IDENTITY_FILE_MODE = ssl_utils.KEY_FILE_MODE
-_IDENTITY_DIR_MODE = ssl_utils.IDENTITY_DIR_MODE
 
 
 class NodeIdentity:
