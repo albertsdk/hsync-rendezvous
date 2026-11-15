@@ -25,7 +25,7 @@ import ssl
 import string
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
@@ -579,6 +579,15 @@ class RdvClient:
         """
         return await self._protocol.create_stream()  # type: ignore[union-attr]
 
+    async def send_only(self, frame: dict) -> None:
+        """Send one frame without waiting for a reply (the node's silent ``leave``)."""
+        _reader, writer = await self._protocol.create_stream()  # type: ignore[union-attr]
+        try:
+            writer.write((json.dumps(frame) + "\n").encode("utf-8"))
+            await writer.drain()
+        finally:
+            writer.close()
+
     async def pipeline(self, frames: Sequence[dict], timeout: float = 5.0) -> list[dict]:
         """Send several frames on one stream; each gets its own reply, in order."""
         reader, writer = await self._protocol.create_stream()  # type: ignore[union-attr]
@@ -731,6 +740,15 @@ class RdvTcpClient:
         finally:
             await self._close(writer)
 
+    async def send_only(self, frame: dict) -> None:
+        """Send one frame and close the session without reading a reply."""
+        _reader, writer = await self.open_connection()
+        try:
+            if not await self._write(writer, (json.dumps(frame) + "\n").encode("utf-8")):
+                raise ConnectionError("rendezvous closed the TLS/TCP connection")
+        finally:
+            await self._close(writer)
+
     async def send_raw(self, data: bytes, timeout: float = 1.0) -> RawResult:
         """Send raw bytes, classify the visible reaction (mirrors ``RdvClient``)."""
         reader, writer = await self.open_connection()
@@ -745,3 +763,23 @@ class RdvTcpClient:
             return RawResult(RawOutcome.REPLY, raw)
         finally:
             await self._close(writer)
+
+
+@contextlib.asynccontextmanager
+async def open_session(
+    transport: str, port: int, host: str = "127.0.0.1"
+) -> AsyncIterator[RdvClient | RdvTcpClient]:
+    """Open a ``rdv/1`` client session for a benchmark driver.
+
+    ``"quic"`` reuses ONE QUIC connection and opens a stream per exchange;
+    ``"tcp"`` returns the TLS/TCP client, which dials one session per exchange
+    because the ``rdv/1`` contract is one session per TCP connection. Both expose
+    ``exchange``/``pipeline``/``send_only``, so a driver stays transport-agnostic.
+    """
+    if transport == "tcp":
+        yield RdvTcpClient(port, host)
+        return
+    if transport != "quic":
+        raise ValueError(f"unknown transport: {transport!r}")
+    async with RdvClient(port, host) as client:
+        yield client

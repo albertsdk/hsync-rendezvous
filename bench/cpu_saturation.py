@@ -2,12 +2,17 @@
 
 Answers "at what load does one core saturate?". The rendezvous is a single-process
 asyncio loop, so its CPU is measured as a fraction of ONE core (from
-``/proc/<pid>/stat`` utime+stime). This script spawns the binary and drives it
-with a rising number of concurrent query connections; at each level it reports
-the node CPU% next to the client-observed throughput and latency. The knee where
-CPU approaches ~100% while ops/s stops scaling is the vertical limit of the
-single process — the data that decides whether parallelism / a C port is
-actually needed.
+``/proc/<pid>/stat``). This script spawns the binary and drives it with a rising
+number of concurrent query clients over **QUIC/UDP** (default), **TLS/TCP**, or
+both; at each level it reports the node CPU% next to the client-observed
+throughput and latency. The knee where CPU approaches ~100% while ops/s stops
+scaling is the vertical limit of the single process — the data that decides
+whether parallelism / a C port is actually needed.
+
+Transport asymmetry is part of the contract: a QUIC client reuses one connection
+and opens a stream per query, while ``rdv/1`` over TCP is one session per
+connection, so a TLS/TCP worker pays the handshake on every query — the real
+TCP load model, not a QUIC-shaped one.
 
 Loopback caveat: the client runs on the same host, so at high concurrency it
 competes for CPU. The *node* CPU is isolated via ``/proc``, but the latency
@@ -15,7 +20,8 @@ figures are end-to-end through the client.
 
 Usage:
     cd hsync-rendezvous && python/.venv/bin/python bench/cpu_saturation.py \\
-        [--peers 200] [--levels 1,2,4,8,16,32] [--step-seconds 3] [--json-out FILE]
+        [--transport quic|tcp|both] [--peers 200] [--levels 1,2,4,8,16,32] \\
+        [--step-seconds 3] [--json-out FILE]
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ from common import (  # noqa: E402
     timed_query,
 )
 from harness import (  # noqa: E402
-    RdvClient,
+    open_session,
     query_frame,
     register_frame,
     start_rendezvous,
@@ -49,6 +55,7 @@ from harness import (  # noqa: E402
 )
 
 _BUCKET = "shared"
+_TRANSPORTS = ("quic", "tcp")
 
 
 @dataclass
@@ -61,9 +68,11 @@ class LevelResult:
     p50_ms: float
     p99_ms: float
     queries: int
+    transport: str = "quic"
 
     def as_dict(self) -> dict:
         return {
+            "transport": self.transport,
             "concurrency": self.concurrency,
             "node_cpu_pct_one_core": None if self.cpu_pct is None else round(self.cpu_pct, 1),
             "ops_per_s": round(self.ops_per_s, 1),
@@ -73,21 +82,25 @@ class LevelResult:
         }
 
 
-async def _prime(port: int, peers: int) -> None:
+async def _prime(port: int, peers: int, transport: str) -> None:
     """Register ``peers`` peers into the shared bucket (the load's table)."""
-    async with RdvClient(port) as client:
-        for cid in make_cids(peers, start=7_000_000):
-            await client.exchange(register_frame(cid, _BUCKET), timeout=5.0)
+    async with open_session(transport, port) as client:
+        await client.pipeline(
+            [register_frame(cid, _BUCKET) for cid in make_cids(peers, start=7_000_000)],
+            timeout=30.0,
+        )
 
 
-async def _level(port: int, node_pid: int, concurrency: int, seconds: float) -> LevelResult:
-    """Drive ``concurrency`` query connections for ``seconds``; sample node CPU."""
+async def _level(
+    port: int, node_pid: int, concurrency: int, seconds: float, transport: str
+) -> LevelResult:
+    """Drive ``concurrency`` query clients for ``seconds``; sample node CPU."""
     query = query_frame(_BUCKET, limit=20)
     deadline = time.monotonic() + seconds  # shared wall-clock budget for every worker
     latencies: list[float] = []
 
     async def worker() -> None:
-        async with RdvClient(port) as client:
+        async with open_session(transport, port) as client:
             while time.monotonic() < deadline:
                 latencies.append(await timed_query(client, query, require_no_error=False))
 
@@ -105,6 +118,7 @@ async def _level(port: int, node_pid: int, concurrency: int, seconds: float) -> 
         p50_ms=percentile(lat_ms, 50.0),
         p99_ms=percentile(lat_ms, 99.0),
         queries=len(latencies),
+        transport=transport,
     )
 
 
@@ -145,13 +159,29 @@ def _verdict(levels: list[LevelResult]) -> None:
 
 
 async def _amain(
-    port: int, node_pid: int, levels: list[int], step_seconds: float
+    port: int,
+    node_pid: int,
+    levels: list[int],
+    step_seconds: float,
+    transports: tuple[str, ...],
+    peers: int,
 ) -> list[LevelResult]:
-    return [await _level(port, node_pid, n, step_seconds) for n in levels]
+    results: list[LevelResult] = []
+    for transport in transports:
+        await _prime(port, peers, transport)
+        for level in levels:  # sequential: each level owns its sampling window
+            results.append(await _level(port, node_pid, level, step_seconds, transport))
+    return results
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--transport",
+        choices=("quic", "tcp", "both"),
+        default="quic",
+        help="Transport to sweep (default quic; both runs the sweep twice).",
+    )
     parser.add_argument("--peers", type=int, default=200, help="Peers primed in the bucket.")
     parser.add_argument(
         "--levels",
@@ -165,17 +195,25 @@ def main() -> None:
     args = parser.parse_args()
 
     levels = [int(x) for x in args.levels.split(",") if x.strip()]
+    transports = _TRANSPORTS if args.transport == "both" else (args.transport,)
     with tempfile.TemporaryDirectory(prefix="rendezvous-cpu-") as tmp:
         handle = start_rendezvous(Path(tmp), no_rate_limit=True)
         node_pid = handle.node_pid
         if node_pid is None:  # pragma: no cover - start_rendezvous always awaits readiness
             raise RuntimeError("rendezvous readiness PID was not reported")
         try:
-            asyncio.run(_prime(handle.port, args.peers))
-            results = asyncio.run(_amain(handle.port, node_pid, levels, args.step_seconds))
-            print("CPU-saturation sweep (loopback; node CPU from /proc/<pid>/stat)")
-            _print_table(results)
-            _verdict(results)
+            results = asyncio.run(
+                _amain(handle.port, node_pid, levels, args.step_seconds, transports, args.peers)
+            )
+            print(
+                f"CPU-saturation sweep, transport={args.transport} "
+                "(loopback; node CPU from /proc/<pid>/stat)"
+            )
+            for transport in transports:
+                print(f"\ntransport={transport}")
+                rows = [row for row in results if row.transport == transport]
+                _print_table(rows)
+                _verdict(rows)
             maybe_write_json(args.json_out, results)
         finally:
             terminate(handle)
