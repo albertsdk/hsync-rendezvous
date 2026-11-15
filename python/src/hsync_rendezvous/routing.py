@@ -405,11 +405,17 @@ class RoutingTable:
         result: list[PeerRecord] = []
         chosen: set[int] = set()
         budget = max(4 * k, 64)
-        # Bound attribute lookups and the ``len(result)`` builtin out of the
-        # draw loop; ``taken`` mirrors the appended count exactly.
+        # Bound the *attempts*, never the distinct hits: with ``n < budget``
+        # (e.g. 79 keys) collecting ``budget`` distinct indices is impossible, and
+        # when fewer than ``k`` sampled records are active the old
+        # ``len(chosen) < budget`` guard never became false — one query spun
+        # forever at 100% CPU (a partly-expired 21..79-peer group was enough to
+        # pin the node). The linear fallback below serves the short case.
         randbelow = self._randbelow
         taken = 0
-        while taken < k and len(chosen) < budget:
+        attempts = 0
+        while taken < k and attempts < budget:
+            attempts += 1
             idx = randbelow(n)
             if idx in chosen:
                 continue

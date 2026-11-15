@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A query to a partly-expired group (21-79 peers, fewer live than the requested
+  limit) could spin the node at 100% CPU forever; the sampler now bounds its
+  attempts.
 - The L6 memory benchmark runs again (stale `PeerRecord` fields and fingerprint
   validator), and `bench/soak.py` accepts the `--json-out` the README documents.
 

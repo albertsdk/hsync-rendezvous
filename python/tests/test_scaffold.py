@@ -348,3 +348,46 @@ def test_peer_certificate_fingerprint_uses_the_same_grammar() -> None:
     peer["cert_fp"] = "AA:BB"
     with pytest.raises(ValidationError):
         RdvPeer.model_validate(peer)
+
+
+def test_sample_terminates_when_active_records_are_fewer_than_the_limit() -> None:
+    """A partly-expired group must not spin the rejection loop (remote DoS).
+
+    Regression: with ``n < 4 * limit`` keys and fewer than ``limit`` active
+    records, the old ``len(chosen) < budget`` guard was unreachable (only ``n``
+    distinct indices exist), so the query looped forever at 100% CPU — a
+    79-peer group with 11 live peers pinned the node from a single query.
+    """
+    table = RoutingTable()
+    now = 1000.0
+    for i in range(79):
+        table.upsert(
+            PeerRecord(
+                cid=f"Peer{i:017d}",
+                bucket="shared",
+                group=None,
+                ip="198.51.100.7",
+                cert_fp=FP,
+                version="1.0.0",
+                endpoints=(),
+                expires_at=now + (60.0 if i < 11 else -1.0),
+            )
+        )
+    assert table.count("shared") == 79
+
+    real = table._randbelow
+    draws = 0
+
+    def bounded(n: int) -> int:
+        nonlocal draws
+        draws += 1
+        if draws > 100:  # would only happen in the old unbounded loop
+            raise AssertionError("sample exceeded its rejection budget (spin)")
+        return real(n)
+
+    table._randbelow = bounded  # type: ignore[method-assign]
+    sampled = table.sample("shared", limit=20, now=now)
+    table._randbelow = real  # type: ignore[method-assign]
+
+    assert len(sampled) == 11  # the linear fallback serves the short case
+    assert draws <= 100  # 80 rejection attempts + <= 20 shuffle draws
