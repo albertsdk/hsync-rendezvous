@@ -22,6 +22,11 @@ These load/diagnostic tiers drive **QUIC/UDP** through the wire harness in
 black-box test suites (see [`tests/README.md`](../tests/README.md)), not by the
 load tiers.
 
+> **L1 query rows are steady state.** `register` materializes each record's wire
+> projection (`PeerRecord.wire`), so a `query` sample reuses the cached fragment
+> instead of paying a first-touch pydantic rebuild; a large table is therefore
+> not O(n) (10k records: ~28 µs p50 against ~25 µs at 1k).
+
 > **The `quic-handshake` metric measures the handshake, not the teardown.**
 > `aioquic`'s connect context manager calls `wait_closed()` on exit, which blocks
 > on the QUIC closing-period drain timer (`3 * PTO` — ~130 ms of idle wait on

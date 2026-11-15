@@ -50,10 +50,7 @@ from harness import (  # noqa: E402
 )
 from hsync_common.ratelimit import TokenBucketLimiter  # noqa: E402
 from hsync_rendezvous.handler import RendezvousHandler  # noqa: E402
-from hsync_rendezvous.protocol import RdvQuery  # noqa: E402
 from hsync_rendezvous.routing import PeerRecord, RoutingTable  # noqa: E402
-
-_QUERY = RdvQuery(protocol_version="rdv/1", type="query", bucket="shared", group="g")
 
 
 def _retained(build: Callable[[], object]) -> tuple[int, object]:
@@ -80,9 +77,7 @@ def _make_record(index: int, bucket: str, endpoints: int) -> PeerRecord:
         bucket=bucket,
         group="g",
         ip="10.0.0.1",
-        port=40000,
-        proto="udp",
-        cert_fp="AA:BB:CC:DD",
+        cert_fp="sha256:" + "ab" * 32,
         version="1.0.0",
         endpoints=tuple(("udp", host, 40000 + j) for j in range(endpoints)),
     )
@@ -99,7 +94,7 @@ def _measure_records(records: int, endpoints: int, *, wire: bool) -> float:
             if wire:
                 # Steady state: every record has served a query at least once,
                 # so its pre-serialized fragment is cached on the record.
-                RendezvousHandler._to_peer(record, _QUERY)
+                RendezvousHandler._to_peer(record)
         return table
 
     total, table = _retained(build)

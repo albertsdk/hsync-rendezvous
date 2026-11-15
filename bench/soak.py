@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 from aioquic.asyncio import connect  # noqa: E402
 from common import (  # noqa: E402
+    add_json_out,
     cpu_percent,
     format_cpu,
     make_cids,
@@ -46,7 +47,7 @@ from harness import (  # noqa: E402
 )
 
 
-async def _soak(args: argparse.Namespace, port: int, node_pid: int) -> int:
+async def _soak(args: argparse.Namespace, port: int, node_pid: int) -> dict[str, object]:
     t0 = time.monotonic()
     cids = make_cids(args.peers, start=9_000_000)
     config = client_config()
@@ -126,7 +127,19 @@ async def _soak(args: argparse.Namespace, port: int, node_pid: int) -> int:
     )
     ok = errors == 0 and left == 0 and (rss_end - rss_start) <= args.max_rss_mb
     print("SOAK-" + ("PASS" if ok else "FAIL"))
-    return 0 if ok else 1
+    return {
+        "ok": ok,
+        "duration_s": round(time.monotonic() - t0, 1),
+        "peers": args.peers,
+        "qps": args.qps,
+        "ops": ops,
+        "errors": errors,
+        "peers_left": left,
+        "rss_start_mb": round(rss_start, 1),
+        "rss_end_mb": round(rss_end, 1),
+        "rss_delta_mb": round(rss_end - rss_start, 1),
+        "cpu_avg_pct": None if cpu_avg is None else round(cpu_avg, 1),
+    }
 
 
 def main() -> None:
@@ -142,6 +155,7 @@ def main() -> None:
         default=90.0,
         help="Seconds to wait after load for TTL/prune convergence.",
     )
+    add_json_out(parser)
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="rendezvous-soak-") as tmp:
@@ -150,10 +164,15 @@ def main() -> None:
         if node_pid is None:  # pragma: no cover - start_rendezvous always awaits readiness
             raise RuntimeError("rendezvous readiness PID was not reported")
         try:
-            code = asyncio.run(_soak(args, handle.port, node_pid))
+            summary = asyncio.run(_soak(args, handle.port, node_pid))
         finally:
             terminate(handle)
-    raise SystemExit(code)
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as stream:
+            json.dump(summary, stream, indent=2)
+            stream.write("\n")
+        print(f"wrote {args.json_out}")
+    raise SystemExit(0 if summary["ok"] else 1)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,9 @@ Methodology (corrected):
   leaks into a measured sample (production prunes every 15 s, not per request).
 * Input frames are pre-encoded ``bytes`` (the production transport passes
   ``bytes``), prebuilt outside the timed region.
+* Each record's wire projection is materialized when ``register`` creates it, so
+  a ``query`` sample measures the steady state rather than a first-touch rebuild
+  (the same reason a large table no longer looks O(n)).
 
 Usage:
     cd hsync-rendezvous && python/.venv/bin/python bench/bench_handler.py \
@@ -111,7 +114,8 @@ def _bench_register(count: int) -> BenchResult:
 
 def _bench_query(table_size: int, limit: int, count: int) -> BenchResult:
     # One handler, no rate limits; one untimed prune so the first measured query
-    # never pays an O(n) sweep. Warmup warms the materialized peer cache.
+    # never pays an O(n) sweep. Every record's wire projection is materialized at
+    # register, so these are steady-state numbers (no first-touch rebuild).
     handler = RendezvousHandler(enforce_rate_limits=False)
     _populate(handler, "shared", table_size)
     handler.prune()

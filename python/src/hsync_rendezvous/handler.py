@@ -526,6 +526,10 @@ class RendezvousHandler:
                 return self._response(
                     peers=[], error="overloaded", retry_after=max(1, int(self.ttl))
                 )
+        # Materialize the wire projection now: the record depends only on its own
+        # fields, so paying it once at register (~6 µs) keeps every later query
+        # flat instead of paying it on the first sample of each peer.
+        peer_fragment(record)
         self.stats.peers_changed(self.routing.count(), written=True)
         if debug_enabled():
             debug_event(
@@ -585,8 +589,10 @@ class RendezvousHandler:
         if model.connected is not None and model.connected != record.connected:
             record.connected = model.connected
             # ``connected`` is part of the wire projection: drop the cached
-            # RdvPeer so the next query reflects the refreshed count.
+            # fragment, then rebuild it so the next query reflects the refreshed
+            # count without paying the pydantic rebuild on the query path.
             record.wire = None
+            peer_fragment(record)
         if debug_enabled():
             debug_event(
                 "refresh ack",
@@ -695,14 +701,15 @@ class RendezvousHandler:
             return refused
 
         records = self.routing.sample(model.bucket, model.group, model.limit)
-        # Bind the module-level serializer directly (``_to_peer`` is a thin
+        # The fragment is already materialized by register/refresh; the
+        # module-level serializer is bound directly (``_to_peer`` is a thin
         # wrapper): one Python call less per relayed peer. The debug-only cid
         # list is derived from the first ``len(peers)`` records instead of a
         # parallel list the hot path never reads.
         budget = MAX_RESPONSE_BYTES - _ENVELOPE_RESERVE_BYTES
         peers: list[bytes] = []
         for record in records:
-            fragment = peer_fragment(record, model)
+            fragment = peer_fragment(record)
             size = len(fragment)
             if size > budget:
                 break
@@ -885,6 +892,6 @@ class RendezvousHandler:
         )
 
     @staticmethod
-    def _to_peer(record: PeerRecord, model: RdvQuery) -> bytes:
+    def _to_peer(record: PeerRecord) -> bytes:
         """Relay one peer's candidate endpoints (serialization in ``wire.py``)."""
-        return peer_fragment(record, model)
+        return peer_fragment(record)

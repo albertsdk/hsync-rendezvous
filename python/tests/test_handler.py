@@ -1161,7 +1161,6 @@ def test_peer_record_keeps_endpoints_compact_and_caches_wire_bytes() -> None:
     ``bytes`` fragment unchanged on the second call (no per-query rebuild).
     """
     from hsync_rendezvous.handler import RendezvousHandler
-    from hsync_rendezvous.protocol import RdvQuery
 
     h = make_handler()
     send(h, register_frame(), peer_ip="198.51.100.7", peer_port=54321)
@@ -1169,11 +1168,36 @@ def test_peer_record_keeps_endpoints_compact_and_caches_wire_bytes() -> None:
     assert record is not None
     assert record.endpoints == (("tcp", "198.51.100.7", 443),)
 
-    query = RdvQuery(protocol_version="rdv/1", type="query", bucket="shared", group="home")
-    first = RendezvousHandler._to_peer(record, query)
+    first = RendezvousHandler._to_peer(record)
     assert isinstance(first, bytes)
     assert record.wire is first
-    assert RendezvousHandler._to_peer(record, query) is first
+    assert RendezvousHandler._to_peer(record) is first
+
+
+def test_register_materializes_the_wire_projection_and_refresh_rebuilds_it() -> None:
+    """Register/refresh keep the cached fragment current, so the query path is flat.
+
+    The projection depends only on the record (the bucket comes from the record),
+    so it is materialized when the record is created instead of on the first query
+    that samples it; a refresh that changes ``connected`` rebuilds it rather than
+    leaving a stale fragment or deferring the rebuild to a query.
+    """
+    h = make_handler()
+    send(h, register_frame(), peer_ip="198.51.100.7", peer_port=54321)
+    record = h.routing.get(CID, "shared", "home")
+    assert record is not None
+    assert record.wire is not None  # materialized by register, before any query
+    first = record.wire
+
+    send(
+        h,
+        refresh_frame(connected=9),
+        peer_ip="198.51.100.7",
+        peer_port=54321,
+    )
+    assert record.wire is not None
+    assert record.wire != first
+    assert b'"connected":9' in record.wire
 
 
 # --- source-IP ownership (anti-hijack), per-IP isolation and bounded table ---

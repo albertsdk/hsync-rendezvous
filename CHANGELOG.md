@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `--version` is answered before the CLI stack is imported (~260 ms to ~15 ms),
+  so packaging scripts and health checks no longer load Typer/pydantic/aioquic.
+- A peer's wire projection is materialized at register/refresh instead of on the
+  first query, so query cost stays flat as a table grows (10k peers: ~138 us to
+  ~28 us p50, at the cost of ~13 us more on the one-off register).
+
+### Fixed
+
+- The L6 memory benchmark runs again (stale `PeerRecord` fields and fingerprint
+  validator), and `bench/soak.py` accepts the `--json-out` the README documents.
+
 ## [1.1.0] - 2026-11-11
 
 ### Added

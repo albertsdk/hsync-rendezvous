@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hsync-rendezvous = "hsync_rendezvous.cli:app"
+hsync-rendezvous = "hsync_rendezvous.main:main"
 
 [tool.poetry]
 packages = [{ include = "hsync_rendezvous", from = "src" }]

@@ -18,7 +18,6 @@ from hsync_rendezvous.protocol import (
     Endpoint,
     RdvError,
     RdvPeer,
-    RdvQuery,
 )
 from hsync_rendezvous.routing import PeerRecord
 
@@ -100,7 +99,7 @@ def ack_bytes(
     )
 
 
-def peer_fragment(record: PeerRecord, model: RdvQuery) -> bytes:
+def peer_fragment(record: PeerRecord) -> bytes:
     """Relay the peer's advertised candidate endpoints.
 
     The first :data:`MAX_RELAY_ENDPOINTS` advertised candidates are relayed
@@ -111,6 +110,11 @@ def peer_fragment(record: PeerRecord, model: RdvQuery) -> bytes:
     send other peers at a dead endpoint. The advisory fields (``capacity``,
     ``reachable`` and the election advertisement) share one projection so they
     cannot drift; the whole record is relayed verbatim and never interpreted.
+
+    The bucket comes from the record itself: a sample only ever contains records
+    of the queried bucket, so the projection depends on the record alone — that
+    is what lets ``register`` materialize it once instead of the first query
+    paying the pydantic rebuild (~6 µs) per sampled peer.
 
     Returns the pre-serialized JSON fragment (not the ``RdvPeer`` model), so the
     record caches bytes — see ``PeerRecord.wire``.
@@ -126,7 +130,7 @@ def peer_fragment(record: PeerRecord, model: RdvQuery) -> bytes:
         cid=record.cid,
         endpoints=endpoints,
         cert_fp=record.cert_fp,
-        bucket=model.bucket,
+        bucket=record.bucket,
         group=record.group,
         version=record.version,
         capacity=record.capacity,
