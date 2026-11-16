@@ -305,6 +305,48 @@ def test_routing_table_upsert_prune_sample() -> None:
     assert table.count("shared") == 0
 
 
+def test_cid_index_keeps_one_key_per_record_until_a_second_group() -> None:
+    """The ``(cid, bucket)`` index holds the key itself, not a one-element set.
+
+    A set per record is pure per-record overhead (the common case is one group);
+    it is promoted only when the same CID registers a second group of the same
+    bucket, and collapsed back to a single key once one record leaves.
+    """
+    table = RoutingTable()
+    table.upsert(
+        PeerRecord(
+            cid=CID,
+            bucket="shared",
+            group="home",
+            ip="198.51.100.7",
+            cert_fp=FP,
+            version="1.0.0",
+            endpoints=(),
+        )
+    )
+    assert isinstance(table._by_cid[(CID, "shared")], tuple)
+
+    table.upsert(
+        PeerRecord(
+            cid=CID,
+            bucket="shared",
+            group="work",
+            ip="198.51.100.8",
+            cert_fp=FP,
+            version="1.0.0",
+            endpoints=(),
+        )
+    )
+    assert isinstance(table._by_cid[(CID, "shared")], set)
+
+    table.remove(CID, "shared", source_ip="198.51.100.7")
+    assert isinstance(table._by_cid[(CID, "shared")], tuple)
+    assert table.source_ips(CID, "shared") == ["198.51.100.8"]
+
+    table.remove(CID, "shared", source_ip="198.51.100.8")
+    assert (CID, "shared") not in table._by_cid
+
+
 def test_token_bucket_burst_then_sustained() -> None:
     lim = TokenBucketLimiter(capacity=10, refill=5, window=60.0)
     now = 1000.0

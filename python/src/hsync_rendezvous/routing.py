@@ -114,6 +114,51 @@ class PeerRecord:
         )
 
 
+_CidKey = tuple[str, str, str | None]
+# ``_by_cid`` maps ``(cid, bucket)`` to its keys: one key tuple in the common
+# single-group case, a set only when a peer uses several groups of that bucket.
+# A set per record would pay a full set allocation for the usual one-group entry.
+_CidIndexEntry = _CidKey | set[_CidKey]
+_CidIndex = dict[tuple[str, str], _CidIndexEntry]
+
+
+def _cid_add(by_cid: _CidIndex, key: _CidKey) -> None:
+    """Add *key* to the CID index, allocating a set only on a real collision."""
+    cid_key = (key[0], key[1])
+    existing = by_cid.get(cid_key)
+    if existing is None:
+        by_cid[cid_key] = key
+    elif isinstance(existing, set):
+        existing.add(key)
+    else:
+        by_cid[cid_key] = {existing, key}
+
+
+def _cid_keys(entry: _CidIndexEntry) -> set[_CidKey] | tuple[_CidKey, ...]:
+    """The keys of one CID-index entry as an iterable (no copy)."""
+    return entry if isinstance(entry, set) else (entry,)
+
+
+def _cid_discard(by_cid: _CidIndex, key: _CidKey) -> None:
+    """Drop *key* from the CID index, collapsing a two-key set back to one key.
+
+    The index mirrors ``_records``, so *key* is present whenever this is called;
+    a single-key entry therefore always empties.
+    """
+    cid_key = (key[0], key[1])
+    entry = by_cid.get(cid_key)
+    if entry is None:
+        return
+    if not isinstance(entry, set):
+        by_cid.pop(cid_key, None)
+        return
+    entry.discard(key)
+    if not entry:
+        by_cid.pop(cid_key, None)
+    elif len(entry) == 1:
+        by_cid[cid_key] = next(iter(entry))
+
+
 class RoutingTable:
     """In-memory registry of active peers (per ``rdv/1``), RAM only.
 
@@ -130,7 +175,9 @@ class RoutingTable:
     ) -> None:
         self._records: dict[tuple[str, str, str | None], PeerRecord] = {}
         self._by_group: dict[tuple[str, str | None], list[tuple[str, str, str | None]]] = {}
-        self._by_cid: dict[tuple[str, str], set[tuple[str, str, str | None]]] = {}
+        # ``(cid, bucket) -> key`` for the usual single-group record; a set only
+        # when the peer uses several groups of that bucket (see ``_cid_add``).
+        self._by_cid: _CidIndex = {}
         self._pos: dict[tuple[str, str, str | None], int] = {}
         self._per_bucket: dict[str, int] = {}
         self._max_records = max_records
@@ -173,7 +220,7 @@ class RoutingTable:
             lst = self._by_group.setdefault((record.bucket, record.group), [])
             self._pos[key] = len(lst)
             lst.append(key)
-            self._by_cid.setdefault((record.cid, record.bucket), set()).add(key)
+            _cid_add(self._by_cid, key)
             self._per_bucket[record.bucket] = self._per_bucket.get(record.bucket, 0) + 1
         self._records[key] = record
         return True
@@ -213,14 +260,14 @@ class RoutingTable:
     def _rebuild_indexes(self) -> None:
         """Rebuild every secondary index from ``_records`` in one linear pass."""
         by_group: dict[tuple[str, str | None], list[tuple[str, str, str | None]]] = {}
-        by_cid: dict[tuple[str, str], set[tuple[str, str, str | None]]] = {}
+        by_cid: _CidIndex = {}
         pos: dict[tuple[str, str, str | None], int] = {}
         per_bucket: dict[str, int] = {}
         for key in self._records:
             lst = by_group.setdefault((key[1], key[2]), [])
             pos[key] = len(lst)
             lst.append(key)
-            by_cid.setdefault((key[0], key[1]), set()).add(key)
+            _cid_add(by_cid, key)
             per_bucket[key[1]] = per_bucket.get(key[1], 0) + 1
         self._by_group = by_group
         self._by_cid = by_cid
@@ -248,18 +295,18 @@ class RoutingTable:
 
         Returns the number of records removed.
         """
-        keys = self._by_cid.get((cid, bucket))
-        if not keys:
+        entry = self._by_cid.get((cid, bucket))
+        if entry is None:
             return 0
         records = self._records
-        doomed = [key for key in keys if source_ip is None or records[key].ip == source_ip]
+        doomed = [
+            key for key in _cid_keys(entry) if source_ip is None or records[key].ip == source_ip
+        ]
         for key in doomed:
             self._drop(key)
             # _drop (via _unindex) does not touch _by_cid — see its contract:
             # the caller updates the cid index, so it always mirrors _records.
-            keys.discard(key)
-        if not keys:
-            self._by_cid.pop((cid, bucket), None)
+            _cid_discard(self._by_cid, key)
         return len(doomed)
 
     def source_ips(self, cid: str, bucket: str) -> list[str]:
@@ -268,10 +315,11 @@ class RoutingTable:
         Used by the leave policy to decide whether the sender may be the
         legitimate owner of the registration.
         """
-        keys = self._by_cid.get((cid, bucket))
-        if not keys:
+        entry = self._by_cid.get((cid, bucket))
+        if entry is None:
             return []
-        return [self._records[key].ip for key in keys]
+        records = self._records
+        return [records[key].ip for key in _cid_keys(entry)]
 
     def get(
         self,
@@ -330,10 +378,7 @@ class RoutingTable:
             for key in expired:
                 self._unindex(key)
                 self._decrement_bucket(key[1])
-                cset = self._by_cid[(key[0], key[1])]
-                cset.discard(key)
-                if not cset:
-                    del self._by_cid[(key[0], key[1])]
+                _cid_discard(self._by_cid, key)
         return len(expired)
 
     # -- queries -----------------------------------------------------------
