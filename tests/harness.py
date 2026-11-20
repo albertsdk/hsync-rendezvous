@@ -28,7 +28,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from enum import Enum
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
@@ -283,6 +283,30 @@ def query_frame(
     if token is not None:
         frame["bucket_token"] = token
     return frame
+
+
+class _FrameExchange(Protocol):
+    """Anything that answers one ``rdv/1`` frame (QUIC stream or TLS/TCP session)."""
+
+    async def exchange(self, frame: dict, timeout: float = 5.0) -> dict: ...
+
+
+async def exhaust_query_budget(client: _FrameExchange, bucket: str, *, extra: int = 40) -> dict:
+    """Query until the ``(IP, bucket)`` budget refuses; return the refusal frame.
+
+    The burst is a token bucket that keeps refilling while it drains, so the
+    first refusal does not land at a fixed index: over TLS/TCP every exchange
+    pays a handshake and earns tokens back, so a slower transport is refused
+    later than a fast one. Looping keeps the assertion transport-agnostic while
+    still proving the limit exists and answers ``rate_limited``.
+    """
+    for _ in range(QUERY_PAIR_BURST + extra):
+        reply = await client.exchange(query_frame(bucket))
+        error = reply.get("error")
+        if error == "rate_limited":
+            return reply
+        assert error is None, f"unexpected refusal before the limit: {reply}"
+    raise AssertionError(f"no rate_limited within {QUERY_PAIR_BURST + extra} queries")
 
 
 # ---------------------------------------------------------------------------

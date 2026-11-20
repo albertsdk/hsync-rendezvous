@@ -17,6 +17,7 @@ from harness import (
     QUERY_PAIR_BURST,
     REGISTER_PAIR_BURST,
     RdvClient,
+    exhaust_query_budget,
     query_frame,
     random_cid,
     refresh_frame,
@@ -29,12 +30,9 @@ async def test_query_rate_limited_after_burst(rendezvous_factory, bucket) -> Non
     # Given: a node with rate limits on
     handle = rendezvous_factory()
     async with RdvClient(handle.port) as client:
-        # When: the query burst is exhausted
-        for _ in range(QUERY_PAIR_BURST):
-            response = await client.exchange(query_frame(bucket))
-            assert response["error"] is None
-        limited = await client.exchange(query_frame(bucket))
-    # Then: the next query is rate_limited with a retry hint
+        # When: the query budget is exhausted
+        limited = await exhaust_query_budget(client, bucket)
+    # Then: the query is rate_limited with a retry hint
     assert limited["type"] == "response"
     assert limited["error"] == "rate_limited"
     assert limited["peers"] == []
