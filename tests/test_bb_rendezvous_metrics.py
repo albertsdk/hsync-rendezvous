@@ -15,10 +15,9 @@ from pathlib import Path
 
 import pytest
 from harness import (
-    QUERY_PAIR_BURST,
     RdvClient,
+    exhaust_query_budget,
     free_tcp_port,
-    query_frame,
     random_cid,
     register_frame,
     run_cli,
@@ -222,10 +221,8 @@ async def test_refusals_limit_hits_and_silent_drops_are_reported_by_reason(
     cid = random_cid(rng)
     async with RdvClient(handle.port) as client:
         await client.exchange(register_frame(cid, bucket))
-        # Drain the query burst so the next query is refused...
-        for _ in range(QUERY_PAIR_BURST):
-            assert (await client.exchange(query_frame(bucket)))["error"] is None
-        refused = await client.exchange(query_frame(bucket))
+        # Drain the query budget until the (IP, bucket) limiter refuses...
+        refused = await exhaust_query_budget(client, bucket)
         assert refused["error"] == "rate_limited"
         # ...and send one malformed frame, which is dropped without a reply.
         await client.send_raw(b"{oops\n")
