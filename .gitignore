@@ -35,11 +35,5 @@ bench_result.txt
 packaging/windows/WinSW-x64.exe
 packaging/windows/icon.ico
 
-# AI Agents
-AGENTS.md
-
 # HSYNC
 .hsynckeep
-
-# Internal agent knowledge base (local-only, not versioned)
-/llm-wiki/
