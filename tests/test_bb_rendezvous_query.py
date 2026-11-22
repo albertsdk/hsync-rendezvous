@@ -66,7 +66,6 @@ async def test_query_relays_the_election_advertisement(rendezvous_factory, bucke
                 bucket,
                 server_ready=True,
                 prefer_master=True,
-                startup_time=1760000000.5,
                 sync_direction="download-only",
             )
         )
@@ -82,12 +81,10 @@ async def test_query_relays_the_election_advertisement(rendezvous_factory, bucke
     assert relayed[cid_master]["server_ready"] is True
     assert relayed[cid_master]["prefer_master"] is True
     assert relayed[cid_master]["never_master"] is False
-    assert relayed[cid_master]["startup_time"] == 1760000000.5
     assert relayed[cid_master]["sync_direction"] == "download-only"
     assert relayed[cid_never]["server_ready"] is False
     assert relayed[cid_never]["prefer_master"] is False
     assert relayed[cid_never]["never_master"] is True
-    assert relayed[cid_never]["startup_time"] == 0.0
     assert relayed[cid_never]["sync_direction"] == "bidirectional"
 
 

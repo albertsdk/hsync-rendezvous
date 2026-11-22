@@ -293,9 +293,9 @@ neither carries nor changes it.
 
 ## Election advertisement (`server_ready`, `prefer_master`, `never_master`)
 
-A `register` may also carry the master-election advertisement: the three flags
-`server_ready`, `prefer_master`, `never_master` plus `startup_time` and
-`sync_direction` (defaults: `false`, `false`, `false`, `0.0` and
+A `register` may also carry the master-election advertisement: the flags
+`server_ready`, `prefer_master`, `never_master`, `inbound` and
+`sync_direction` (defaults: `false`, `false`, `false`, `false` and
 `bidirectional`). The node stores them and echoes them on every peer of a
 `query` response, so devices that find each other through the node run the same
 master election they would run on a local network:
@@ -304,7 +304,9 @@ master election they would run on a local network:
   the election over a newcomer, even one set with `prefer_master`, so a peer
   that joins later does not trigger a takeover.
 - `never_master` excludes a device from candidacy (`hsync p2p --never-master`).
-- `startup_time` and `sync_direction` break remaining ties deterministically.
+- `inbound` outranks a relay-only device, and `sync_direction` expresses the
+  bidirectional preference. No field is a timestamp: the client election never
+  reads a clock, so a skewed clock cannot win mastership.
 
 Like `capacity`, the advertisement is **advisory only**: it is not
 authenticated, the node never interprets it, and the data plane still

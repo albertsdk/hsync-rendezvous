@@ -186,7 +186,7 @@ async def test_malformed_field_types_are_dropped(rendezvous_factory, bucket, rng
         {"protocol_version": "rdv/1", "type": "register", "cid": 123, "bucket": bucket},
         {"protocol_version": 1, "type": "query", "bucket": bucket},
         register_frame(random_cid(rng), bucket, connected=-1),
-        register_frame(random_cid(rng), bucket, startup_time=-1.0),
+        register_frame(random_cid(rng), bucket, capacity=-1),
         register_frame(random_cid(rng), bucket, sync_direction="sideways"),  # type: ignore[arg-type]
     ]
     for frame in cases:

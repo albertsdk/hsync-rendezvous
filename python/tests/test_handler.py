@@ -317,7 +317,6 @@ def test_election_advertisement_round_trips_through_query() -> None:
             cid=CID,
             server_ready=True,
             prefer_master=True,
-            startup_time=1760000000.5,
             sync_direction="download-only",
         ),
         peer_ip="198.51.100.7",
@@ -334,12 +333,10 @@ def test_election_advertisement_round_trips_through_query() -> None:
     assert relayed[CID]["server_ready"] is True
     assert relayed[CID]["prefer_master"] is True
     assert relayed[CID]["never_master"] is False
-    assert relayed[CID]["startup_time"] == 1760000000.5
     assert relayed[CID]["sync_direction"] == "download-only"
     assert relayed[CID2]["server_ready"] is False
     assert relayed[CID2]["prefer_master"] is False
     assert relayed[CID2]["never_master"] is True
-    assert relayed[CID2]["startup_time"] == 0.0
     assert relayed[CID2]["sync_direction"] == "bidirectional"
 
 
@@ -357,7 +354,6 @@ def test_election_advertisement_defaults_and_survives_refresh() -> None:
     assert record.server_ready is False
     assert record.prefer_master is False
     assert record.never_master is False
-    assert record.startup_time == 0.0
     assert record.sync_direction == "bidirectional"
     send(
         h,
@@ -376,7 +372,6 @@ def test_election_advertisement_defaults_and_survives_refresh() -> None:
     assert response is not None
     peer = response["peers"][0]
     assert peer["server_ready"] is False
-    assert peer["startup_time"] == 0.0
     assert peer["sync_direction"] == "bidirectional"
 
 
@@ -1080,7 +1075,6 @@ def test_wire_serialization_is_compact_and_spec_ordered() -> None:
         "prefer_master",
         "never_master",
         "inbound",
-        "startup_time",
         "sync_direction",
     ]
     assert decoded_ok["peers"][0]["endpoints"][0]["host"] == "198.51.100.7"

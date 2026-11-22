@@ -19,7 +19,7 @@ guesses the frame kind from the payload shape.
 
 | Frame | Direction | Model | Fields (beyond the header) |
 |---|---|---|---|
-| `register` | client → server | `RdvRegister` (`python/src/hsync_rendezvous/protocol.py::RdvRegister`) | `cid`, `bucket`, `group?`, `bucket_token?`, `cert_fp`, `version`, `capacity`, `endpoints[]`, `connected?`, `server_ready?`, `prefer_master?`, `never_master?`, `inbound?`, `startup_time?`, `sync_direction?` |
+| `register` | client → server | `RdvRegister` (`python/src/hsync_rendezvous/protocol.py::RdvRegister`) | `cid`, `bucket`, `group?`, `bucket_token?`, `cert_fp`, `version`, `capacity`, `endpoints[]`, `connected?`, `server_ready?`, `prefer_master?`, `never_master?`, `inbound?`, `sync_direction?` |
 | `refresh` | client → server | `RdvRefresh` (`python/src/hsync_rendezvous/protocol.py::RdvRefresh`) | `cid`, `bucket`, `group?`, `bucket_token?`, `connected?` |
 | `leave` | client → server | `RdvLeave` (`python/src/hsync_rendezvous/protocol.py::RdvLeave`) | `cid`, `bucket`, `bucket_token?` |
 | `query` | client → server | `RdvQuery` (`python/src/hsync_rendezvous/protocol.py::RdvQuery`) | `bucket`, `group?`, `bucket_token?`, `limit` (1–50, default 20) |
@@ -42,13 +42,13 @@ authenticated and not authoritative** — the authoritative value is `serve_slot
 on the authenticated data-plane handshake (ADR 0030). `refresh` neither carries nor
 mutates it, and the sample is never ordered by it.
 
-`server_ready`/`prefer_master`/`never_master`/`inbound`/`startup_time`/`sync_direction` are the
+`server_ready`/`prefer_master`/`never_master`/`inbound`/`sync_direction` are the
 **election advertisement** (decision #31): the same values the client's mDNS TXT
 record carries (SSOT: `hsync-common` `protocol.p2p`/`protocol.pairing`), copied from
 `register` onto the record and echoed on every `query` peer so a rendezvous-discovered
 peer ranks in the client's master election exactly like an mDNS-discovered one.
-Defaults when a peer advertises none: `false`, `false`, `false`, `0.0` (unknown;
-bounded by `STARTUP_TIME_MAX`, `python/src/hsync_rendezvous/protocol.py::STARTUP_TIME_MAX`) and `bidirectional`
+Defaults when a peer advertises none: `false`, `false`, `false`, `false` and
+`bidirectional`
 (`SyncDirection`, `python/src/hsync_rendezvous/protocol.py::SyncDirection`). The node never interprets them, never orders the
 sample by them, and they are **not authenticated** (the data plane authenticates
 identity by certificate pinning). Like `capacity`, a changed value requires a new
@@ -79,7 +79,7 @@ The relayed list is advisory and unauthenticated, like the other peer fields.
 | `Endpoint` (`python/src/hsync_rendezvous/protocol.py::Endpoint`) | `RdvRegister.endpoints[]` | `proto` (`tcp`/`udp`), `host`, `port` |
 | `ObservedEndpoint` (`python/src/hsync_rendezvous/protocol.py::ObservedEndpoint`) | `RdvAck.observed_endpoint` | `proto`, `ip`, `port` (STUN-echo of the source) |
 | `RelayId` (`python/src/hsync_rendezvous/protocol.py::RelayId`) | `RdvRelayAttach.relay_id`, `RdvRelayIncoming.relay_id`, `RdvRelayOk.relay_id` | 32 lowercase hex characters (16 random bytes, minted per pairing) |
-| `RdvPeer` (`python/src/hsync_rendezvous/protocol.py::RdvPeer`) | `response.peers[]` | `cid`, `endpoints[]`, `cert_fp`, `bucket`, `group?`, `version`, `capacity`, `reachable`, `server_ready`, `prefer_master`, `never_master`, `inbound`, `startup_time`, `sync_direction` |
+| `RdvPeer` (`python/src/hsync_rendezvous/protocol.py::RdvPeer`) | `response.peers[]` | `cid`, `endpoints[]`, `cert_fp`, `bucket`, `group?`, `version`, `capacity`, `reachable`, `server_ready`, `prefer_master`, `never_master`, `inbound`, `sync_direction` |
 
 The client→server frames are dispatched in one pass by the discriminated union
 `RdvFrame = Annotated[RdvRegister | RdvRefresh | RdvLeave | RdvQuery,
@@ -98,7 +98,7 @@ excluded from the union: they are never validated on the input path.
 | `BUCKET_TOKEN_LEN` | `protocol.py` | 64 (lowercase hex = `hex(32 bytes)`), derived as `HMAC-SHA256(key, "rdv/1" || bucket)[:32]` |
 | `BucketProto` | `protocol.py` | `Literal["tcp", "udp"]` |
 | `CAPACITY_MAX` | `protocol.py` | 32 — upper bound of the advisory `capacity` hint (`0` = not a seeder); mirrors `serve_slots` |
-| `CONNECTED_MAX` | `protocol.py` | `2^53` — upper bound of the advisory `connected` count (like `STARTUP_TIME_MAX`: inside the exactly-representable integer range of a JSON number) |
+| `CONNECTED_MAX` | `protocol.py` | `2^53` — upper bound of the advisory `connected` count (inside the exactly-representable integer range of a JSON number) |
 | `RDV_DEFAULT_PORT` | imported from `hsync_common.constants` (rendezvous `cli.py` default; client bare-host default) | `443` — default UDP listener port (spec §Transport); single SSOT shared with `hsync-client` |
 | `RDV_PORT_SET` | imported from `hsync_common.constants` (rendezvous `--ports` recommended value; client `HSYNC_RENDEZVOUS_PORTS` fallback) | `(443, 53)` — ordered recommended reachability set (canonical QUIC then DNS); see decision 57 |
 

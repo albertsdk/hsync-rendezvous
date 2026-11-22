@@ -13,7 +13,6 @@ from rdv_response import RdvResponse
 from hsync_rendezvous.protocol import (
     CAPACITY_MAX,
     CID_PATTERN,
-    STARTUP_TIME_MAX,
     RdvAck,
     RdvPeer,
     RdvQuery,
@@ -150,10 +149,9 @@ def test_capacity_hint_domain_bounds() -> None:
 def test_election_advertisement_domain_bounds() -> None:
     """The advertised election values are validated, never silently coerced.
 
-    Defaults (absent keys): not serving, no pin, unknown startup and
-    bidirectional. ``startup_time`` must be a finite non-negative JSON number
-    inside the exact-integer range; ``sync_direction`` must be one of the three
-    canonical tokens the client uses.
+    Defaults (absent keys): not serving, no pin, bidirectional. The vocabulary
+    carries no timestamp: the client election never reads a clock, so the node
+    relays flags and the sync direction only.
     """
     register = {
         "protocol_version": "rdv/1",
@@ -167,31 +165,26 @@ def test_election_advertisement_domain_bounds() -> None:
     assert default.server_ready is False
     assert default.prefer_master is False
     assert default.never_master is False
-    assert default.startup_time == 0.0
+    assert default.inbound is False
     assert default.sync_direction == "bidirectional"
 
     advertised = RdvRegister(
         **register,
         server_ready=True,
         prefer_master=True,
-        startup_time=1760000000.5,
         sync_direction="upload-only",
     )
     assert advertised.server_ready is True
     assert advertised.prefer_master is True
-    assert advertised.startup_time == 1760000000.5
     assert advertised.sync_direction == "upload-only"
 
-    # pydantic's lax mode coerces 1/0 to bool and numeric strings to float; the
-    # client mirror is the strict side of the contract (it rejects both before
-    # sending), so a value that reaches the node is either valid or rejected.
+    # pydantic's lax mode coerces 1/0 to bool; the client mirror is the strict
+    # side of the contract (it rejects both before sending), so a value that
+    # reaches the node is either valid or rejected.
     assert RdvRegister(**register, server_ready=1).server_ready is True
-    assert RdvRegister(**register, startup_time="1760000000").startup_time == 1760000000.0
 
     for bad in (
         {"server_ready": None},
-        {"startup_time": -1},
-        {"startup_time": STARTUP_TIME_MAX * 2},
         {"sync_direction": "sideways"},
     ):
         with pytest.raises(ValueError):
@@ -208,8 +201,6 @@ def test_election_advertisement_domain_bounds() -> None:
     assert RdvPeer(**peer, never_master=True).never_master is True
     with pytest.raises(ValueError):
         RdvPeer(**peer, sync_direction="sideways")
-    with pytest.raises(ValueError):
-        RdvPeer(**peer, startup_time=-1)
 
 
 def test_bucket_token_derivation_and_verify() -> None:

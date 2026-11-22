@@ -40,7 +40,6 @@ __all__ = [
     "MAX_RELAY_ENDPOINTS",
     "MAX_RESPONSE_BYTES",
     "PROTOCOL_VERSION_RDV",
-    "STARTUP_TIME_MAX",
     "RdvAck",
     "RdvError",
     "RdvFrame",
@@ -95,14 +94,10 @@ SyncDirection = Literal["bidirectional", "upload-only", "download-only"]
 # the target CID, or the listener did not attach in time).
 RdvError = Literal["token_required", "rate_limited", "overloaded", "relay_unavailable"]
 
-# Upper bound for the advisory ``connected`` count, like ``startup_time`` kept
-# inside the exactly-representable integer range of a JSON number: a wire value
-# beyond this is garbage (silent drop) instead of an unbounded integer.
+# Upper bound for the advisory ``connected`` count, kept inside the
+# exactly-representable integer range of a JSON number: a wire value beyond this
+# is garbage (silent drop) instead of an unbounded integer.
 CONNECTED_MAX = 2**53
-
-# Bound on the advertised unix ``startup_time`` (kept inside the
-# exactly-representable integer range of a JSON number). ``0.0`` = unknown.
-STARTUP_TIME_MAX = float(2**53)
 
 # A ``response`` relays at most this many endpoints per peer, and the relayed
 # peer fragments of one response stay within this byte budget. Both bound what an
@@ -254,7 +249,7 @@ class RdvRegister(_GroupBucketFrame):
     authoritative value is the authenticated ``serve_slots`` (ADR 0030).
 
     ``server_ready``/``prefer_master``/``never_master``/``inbound``/
-    ``startup_time``/``sync_direction`` are the **election advertisement**: the
+    ``sync_direction`` are the **election advertisement**: the
     same values the mDNS TXT record carries, relayed verbatim in ``query`` peers
     so a rendezvous-discovered peer ranks exactly like a LAN-discovered one. The
     node never interprets them; they are not authenticated and not authoritative
@@ -272,7 +267,6 @@ class RdvRegister(_GroupBucketFrame):
     prefer_master: bool = False
     never_master: bool = False
     inbound: bool = False
-    startup_time: float = Field(default=0.0, ge=0, le=STARTUP_TIME_MAX)
     sync_direction: SyncDirection = "bidirectional"
 
 
@@ -350,7 +344,6 @@ class RdvPeer(_StrictModel):
     prefer_master: bool = False
     never_master: bool = False
     inbound: bool = False
-    startup_time: float = Field(default=0.0, ge=0, le=STARTUP_TIME_MAX)
     sync_direction: SyncDirection = "bidirectional"
 
 
