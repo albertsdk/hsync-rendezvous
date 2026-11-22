@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from typing import Literal
 
+from hsync_common.time_utils import to_iso_seconds
 from pydantic import SecretStr, ValidationError
 
 from hsync_rendezvous.diagnostics import debug_enabled, debug_event, debug_log
@@ -121,14 +122,14 @@ def _utc_now_z() -> str:
 
     Cached per wall-clock second: the format has one-second resolution, so every
     ACK inside the same second carries the identical string, and a registration
-    burst skips one ``strftime`` per frame (the cache key is the epoch second;
+    burst skips one formatting call per frame (the cache key is the epoch second;
     a clock step still forces a reformat).
     """
     global _LAST_UTC_SECOND, _LAST_UTC_Z
     now = time.time()
     second = int(now)
     if second != _LAST_UTC_SECOND:
-        _LAST_UTC_Z = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        _LAST_UTC_Z = to_iso_seconds(second)
         _LAST_UTC_SECOND = second
     return _LAST_UTC_Z
 
