@@ -148,6 +148,7 @@ clients at the node with the `hsync p2p` rendezvous argument (`hsync p2p <host>`
 | [Benchmarks](bench/README.md) | L1–L5 measurement scope and methodology |
 | [Black-box suite](tests/README.md) | Language-neutral wire/CLI contract tests |
 | [Contributing](CONTRIBUTING.md) | Development setup, toolchain, tests and contribution guidelines |
+| [Contributors](CONTRIBUTORS.md) | People who contribute to HSYNC |
 | [Report an issue](https://github.com/albertsdk/hsync-rendezvous/issues) | Open development and bug tracking |
 
 ## Associated Ecosystem Components
