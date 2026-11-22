@@ -50,9 +50,9 @@ async def test_query_relays_the_election_advertisement(rendezvous_factory, bucke
     """The master-election advertisement is relayed verbatim on the public wire.
 
     A requester ranks candidates on these values (a serving incumbent outranks a
-    newcomer; a ``never_master`` peer is not electable, and the advertised
-    early-startup value breaks ties), so the node must echo them unchanged for
-    both peer endpoint branches.
+    newcomer; a ``never_master`` peer is not electable, and the leadership term
+    breaks ties between two serving peers), so the node must echo them unchanged
+    for both peer endpoint branches.
     """
     # Given: a serving incumbent and a never-master seeder
     handle = rendezvous_factory()
@@ -66,6 +66,7 @@ async def test_query_relays_the_election_advertisement(rendezvous_factory, bucke
                 bucket,
                 server_ready=True,
                 prefer_master=True,
+                epoch=4,
                 sync_direction="download-only",
             )
         )
@@ -81,10 +82,12 @@ async def test_query_relays_the_election_advertisement(rendezvous_factory, bucke
     assert relayed[cid_master]["server_ready"] is True
     assert relayed[cid_master]["prefer_master"] is True
     assert relayed[cid_master]["never_master"] is False
+    assert relayed[cid_master]["epoch"] == 4
     assert relayed[cid_master]["sync_direction"] == "download-only"
     assert relayed[cid_never]["server_ready"] is False
     assert relayed[cid_never]["prefer_master"] is False
     assert relayed[cid_never]["never_master"] is True
+    assert relayed[cid_never]["epoch"] == 0
     assert relayed[cid_never]["sync_direction"] == "bidirectional"
 
 

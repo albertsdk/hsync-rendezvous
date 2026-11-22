@@ -19,7 +19,7 @@ guesses the frame kind from the payload shape.
 
 | Frame | Direction | Model | Fields (beyond the header) |
 |---|---|---|---|
-| `register` | client → server | `RdvRegister` (`python/src/hsync_rendezvous/protocol.py::RdvRegister`) | `cid`, `bucket`, `group?`, `bucket_token?`, `cert_fp`, `version`, `capacity`, `endpoints[]`, `connected?`, `server_ready?`, `prefer_master?`, `never_master?`, `inbound?`, `sync_direction?` |
+| `register` | client → server | `RdvRegister` (`python/src/hsync_rendezvous/protocol.py::RdvRegister`) | `cid`, `bucket`, `group?`, `bucket_token?`, `cert_fp`, `version`, `capacity`, `endpoints[]`, `connected?`, `server_ready?`, `prefer_master?`, `never_master?`, `inbound?`, `epoch?`, `sync_direction?` |
 | `refresh` | client → server | `RdvRefresh` (`python/src/hsync_rendezvous/protocol.py::RdvRefresh`) | `cid`, `bucket`, `group?`, `bucket_token?`, `connected?` |
 | `leave` | client → server | `RdvLeave` (`python/src/hsync_rendezvous/protocol.py::RdvLeave`) | `cid`, `bucket`, `bucket_token?` |
 | `query` | client → server | `RdvQuery` (`python/src/hsync_rendezvous/protocol.py::RdvQuery`) | `bucket`, `group?`, `bucket_token?`, `limit` (1–50, default 20) |
@@ -79,7 +79,7 @@ The relayed list is advisory and unauthenticated, like the other peer fields.
 | `Endpoint` (`python/src/hsync_rendezvous/protocol.py::Endpoint`) | `RdvRegister.endpoints[]` | `proto` (`tcp`/`udp`), `host`, `port` |
 | `ObservedEndpoint` (`python/src/hsync_rendezvous/protocol.py::ObservedEndpoint`) | `RdvAck.observed_endpoint` | `proto`, `ip`, `port` (STUN-echo of the source) |
 | `RelayId` (`python/src/hsync_rendezvous/protocol.py::RelayId`) | `RdvRelayAttach.relay_id`, `RdvRelayIncoming.relay_id`, `RdvRelayOk.relay_id` | 32 lowercase hex characters (16 random bytes, minted per pairing) |
-| `RdvPeer` (`python/src/hsync_rendezvous/protocol.py::RdvPeer`) | `response.peers[]` | `cid`, `endpoints[]`, `cert_fp`, `bucket`, `group?`, `version`, `capacity`, `reachable`, `server_ready`, `prefer_master`, `never_master`, `inbound`, `sync_direction` |
+| `RdvPeer` (`python/src/hsync_rendezvous/protocol.py::RdvPeer`) | `response.peers[]` | `cid`, `endpoints[]`, `cert_fp`, `bucket`, `group?`, `version`, `capacity`, `reachable`, `server_ready`, `prefer_master`, `never_master`, `inbound`, `epoch`, `sync_direction` |
 
 The client→server frames are dispatched in one pass by the discriminated union
 `RdvFrame = Annotated[RdvRegister | RdvRefresh | RdvLeave | RdvQuery,
