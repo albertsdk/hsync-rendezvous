@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `epoch` in `register` and every `peers[]` entry: the leadership term the client uses
+  to settle a partition heal.
+
 ### Changed
 
 - `--version` is answered before the CLI stack is imported (~260 ms to ~15 ms),
@@ -14,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A peer's wire projection is materialized at register/refresh instead of on the
   first query, so query cost stays flat as a table grows (10k peers: ~138 us to
   ~28 us p50, at the cost of ~13 us more on the one-off register).
+
+### Removed
+
+- `startup_time` from the election advertisement (register, relayed peers and the
+  protocol spec): the election never reads a clock.
 
 ### Fixed
 
