@@ -308,11 +308,13 @@ The monorepo `p2p`/rendezvous migration is **complete**:
   rendezvous's opt-in **debug operation log** (decision 25); client `hsync p2p`
   with both rendezvous plans and its black-box suite; desktop mode, wd-os5
   packaging; the peer data-plane protocol is `p2p/1`.
-- **Open**: **Android client for `rdv/1`** (deferred; the QUIC stack decision is
-  still open — the Android project removed its Rust/`quiche` JNI groundwork).
-  Current state: the Android project's
+- **Android discovery is LAN-only**: the Android client reaches peers over mDNS
+  and direct LAN (`p2p/1`) and does not speak the `rdv/1` QUIC rendezvous
+  transport, so cross-network discovery is not offered on Android. The desktop,
+  the `hsync-client` `hsync p2p` command and the wd-os5 packaging use `rdv/1`.
+  The Android project's
   [`protocol-mirror`](https://github.com/albertsdk/hsync-android/blob/main/llm-wiki/modules/protocol-mirror.md)
-  page.
+  page records the wire surface it mirrors.
 - **Done / open (quality)**: a deterministic stdlib **fuzz harness** covers the
   decoder and the SSDP/token validators in CI (decision #47, `python/fuzz/
   fuzz_boot.py`), and a **coverage-guided in-process driver** (decision #48,
