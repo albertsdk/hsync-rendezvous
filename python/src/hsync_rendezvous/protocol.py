@@ -36,6 +36,7 @@ __all__ = [
     "RDV_RELAY_OK_ADAPTER",
     "BUCKET_TOKEN_LEN",
     "CAPACITY_MAX",
+    "EPOCH_MAX",
     "CID_PATTERN",
     "MAX_RELAY_ENDPOINTS",
     "MAX_RESPONSE_BYTES",
@@ -93,6 +94,10 @@ SyncDirection = Literal["bidirectional", "upload-only", "download-only"]
 # ``relay_unavailable`` (no data relay: disabled on this node, no listener for
 # the target CID, or the listener did not attach in time).
 RdvError = Literal["token_required", "rate_limited", "overloaded", "relay_unavailable"]
+
+# Upper bound for the leadership term (a Lamport counter: far below the
+# exactly-representable integer range of a JSON number).
+EPOCH_MAX = 2**53
 
 # Upper bound for the advisory ``connected`` count, kept inside the
 # exactly-representable integer range of a JSON number: a wire value beyond this
@@ -249,7 +254,7 @@ class RdvRegister(_GroupBucketFrame):
     authoritative value is the authenticated ``serve_slots`` (ADR 0030).
 
     ``server_ready``/``prefer_master``/``never_master``/``inbound``/
-    ``sync_direction`` are the **election advertisement**: the
+    ``epoch``/``sync_direction`` are the **election advertisement**: the
     same values the mDNS TXT record carries, relayed verbatim in ``query`` peers
     so a rendezvous-discovered peer ranks exactly like a LAN-discovered one. The
     node never interprets them; they are not authenticated and not authoritative
@@ -267,6 +272,7 @@ class RdvRegister(_GroupBucketFrame):
     prefer_master: bool = False
     never_master: bool = False
     inbound: bool = False
+    epoch: int = Field(default=0, ge=0, le=EPOCH_MAX)
     sync_direction: SyncDirection = "bidirectional"
 
 
@@ -344,6 +350,7 @@ class RdvPeer(_StrictModel):
     prefer_master: bool = False
     never_master: bool = False
     inbound: bool = False
+    epoch: int = Field(default=0, ge=0, le=EPOCH_MAX)
     sync_direction: SyncDirection = "bidirectional"
 
 

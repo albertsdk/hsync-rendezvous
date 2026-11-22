@@ -140,6 +140,7 @@ def peer_fragment(record: PeerRecord) -> bytes:
         prefer_master=record.prefer_master,
         never_master=record.never_master,
         inbound=record.inbound,
+        epoch=record.epoch,
         sync_direction=record.sync_direction,
     )
     fragment = RDV_PEER_ADAPTER.dump_json(peer)

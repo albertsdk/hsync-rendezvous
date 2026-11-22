@@ -166,6 +166,7 @@ def test_election_advertisement_domain_bounds() -> None:
     assert default.prefer_master is False
     assert default.never_master is False
     assert default.inbound is False
+    assert default.epoch == 0
     assert default.sync_direction == "bidirectional"
 
     advertised = RdvRegister(
@@ -177,6 +178,9 @@ def test_election_advertisement_domain_bounds() -> None:
     assert advertised.server_ready is True
     assert advertised.prefer_master is True
     assert advertised.sync_direction == "upload-only"
+    assert RdvRegister(**register, epoch=7).epoch == 7
+    with pytest.raises(ValueError):
+        RdvRegister(**register, epoch=-1)
 
     # pydantic's lax mode coerces 1/0 to bool; the client mirror is the strict
     # side of the contract (it rejects both before sending), so a value that

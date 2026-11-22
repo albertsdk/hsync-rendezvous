@@ -42,13 +42,13 @@ authenticated and not authoritative** — the authoritative value is `serve_slot
 on the authenticated data-plane handshake (ADR 0030). `refresh` neither carries nor
 mutates it, and the sample is never ordered by it.
 
-`server_ready`/`prefer_master`/`never_master`/`inbound`/`sync_direction` are the
+`server_ready`/`prefer_master`/`never_master`/`inbound`/`epoch`/`sync_direction` are the
 **election advertisement** (decision #31): the same values the client's mDNS TXT
 record carries (SSOT: `hsync-common` `protocol.p2p`/`protocol.pairing`), copied from
 `register` onto the record and echoed on every `query` peer so a rendezvous-discovered
 peer ranks in the client's master election exactly like an mDNS-discovered one.
-Defaults when a peer advertises none: `false`, `false`, `false`, `false` and
-`bidirectional`
+Defaults when a peer advertises none: `false`, `false`, `false`, `false`, `0`
+(never served) and `bidirectional`
 (`SyncDirection`, `python/src/hsync_rendezvous/protocol.py::SyncDirection`). The node never interprets them, never orders the
 sample by them, and they are **not authenticated** (the data plane authenticates
 identity by certificate pinning). Like `capacity`, a changed value requires a new
@@ -99,6 +99,7 @@ excluded from the union: they are never validated on the input path.
 | `BucketProto` | `protocol.py` | `Literal["tcp", "udp"]` |
 | `CAPACITY_MAX` | `protocol.py` | 32 — upper bound of the advisory `capacity` hint (`0` = not a seeder); mirrors `serve_slots` |
 | `CONNECTED_MAX` | `protocol.py` | `2^53` — upper bound of the advisory `connected` count (inside the exactly-representable integer range of a JSON number) |
+| `EPOCH_MAX` | `protocol.py` | `2^53` — upper bound of the leadership term `epoch` (a Lamport counter, never a timestamp) |
 | `RDV_DEFAULT_PORT` | imported from `hsync_common.constants` (rendezvous `cli.py` default; client bare-host default) | `443` — default UDP listener port (spec §Transport); single SSOT shared with `hsync-client` |
 | `RDV_PORT_SET` | imported from `hsync_common.constants` (rendezvous `--ports` recommended value; client `HSYNC_RENDEZVOUS_PORTS` fallback) | `(443, 53)` — ordered recommended reachability set (canonical QUIC then DNS); see decision 57 |
 

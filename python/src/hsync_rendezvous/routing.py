@@ -62,6 +62,7 @@ class PeerRecord:
     prefer_master: bool = False
     never_master: bool = False
     inbound: bool = False
+    epoch: int = 0
     sync_direction: SyncDirection = "bidirectional"
     expires_at: float = field(default_factory=lambda: time.monotonic() + DEFAULT_TTL)
     # Materialized wire projection, lazily built by RendezvousHandler._to_peer and kept
@@ -108,6 +109,7 @@ class PeerRecord:
             prefer_master=model.prefer_master,
             never_master=model.never_master,
             inbound=model.inbound,
+            epoch=model.epoch,
             sync_direction=model.sync_direction,
         )
 

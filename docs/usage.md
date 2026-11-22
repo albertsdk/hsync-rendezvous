@@ -294,8 +294,8 @@ neither carries nor changes it.
 ## Election advertisement (`server_ready`, `prefer_master`, `never_master`)
 
 A `register` may also carry the master-election advertisement: the flags
-`server_ready`, `prefer_master`, `never_master`, `inbound` and
-`sync_direction` (defaults: `false`, `false`, `false`, `false` and
+`server_ready`, `prefer_master`, `never_master`, `inbound`, `epoch` and
+`sync_direction` (defaults: `false`, `false`, `false`, `false`, `0` and
 `bidirectional`). The node stores them and echoes them on every peer of a
 `query` response, so devices that find each other through the node run the same
 master election they would run on a local network:
@@ -305,8 +305,12 @@ master election they would run on a local network:
   that joins later does not trigger a takeover.
 - `never_master` excludes a device from candidacy (`hsync p2p --never-master`).
 - `inbound` outranks a relay-only device, and `sync_direction` expresses the
-  bidirectional preference. No field is a timestamp: the client election never
-  reads a clock, so a skewed clock cannot win mastership.
+  bidirectional preference.
+- `epoch` is the leadership term: a Lamport counter bumped when the device
+  starts serving (`0` = never served). Between two serving devices the higher
+  term keeps the role, so a partition heal has a deterministic winner.
+- No field is a timestamp: the client election never reads a clock, so a
+  skewed clock cannot win mastership.
 
 Like `capacity`, the advertisement is **advisory only**: it is not
 authenticated, the node never interprets it, and the data plane still

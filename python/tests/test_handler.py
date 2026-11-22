@@ -1075,6 +1075,7 @@ def test_wire_serialization_is_compact_and_spec_ordered() -> None:
         "prefer_master",
         "never_master",
         "inbound",
+        "epoch",
         "sync_direction",
     ]
     assert decoded_ok["peers"][0]["endpoints"][0]["host"] == "198.51.100.7"

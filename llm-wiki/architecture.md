@@ -104,7 +104,7 @@ UDP :443 + TCP :443
 5. Mutation: `register` upserts (STUN-echo source `ip:port`) and copies the
    advisory fields onto the record (`capacity`, `reachable`, and the election
    advertisement `server_ready`/`prefer_master`/`never_master`/`inbound`/
-   `sync_direction` — decision 31); `refresh` touches TTL only and never creates
+   `epoch`/`sync_direction` — decision 31); `refresh` touches TTL only and never creates
    or mutates them. `register`, `refresh` and `leave` all enforce **record
    ownership**: a source other than the record's observed IP is silently refused
    unless the frame was token-authorized on a private/protected bucket, so a
@@ -302,7 +302,7 @@ The monorepo `p2p`/rendezvous migration is **complete**:
   capabilities v3); the advisory `capacity` hint (`0..32`) and the derived
   `reachable` flag relayed `register` → record → `query` (decisions 23–24); the
   **election advertisement** (`server_ready`/`prefer_master`/`never_master`/`inbound`/
-  `sync_direction`) relayed the same way so a rendezvous-discovered
+  `epoch`/`sync_direction`) relayed the same way so a rendezvous-discovered
   peer ranks in the client's master election exactly like an mDNS-discovered one
   (decision 31); the
   rendezvous's opt-in **debug operation log** (decision 25); client `hsync p2p`
