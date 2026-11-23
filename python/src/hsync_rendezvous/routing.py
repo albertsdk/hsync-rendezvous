@@ -345,21 +345,27 @@ class RoutingTable:
     def prune(self, now: float | None = None, *, max_remove: int | None = None) -> int:
         """Drop expired records; returns the number of removed entries.
 
-        ``max_remove`` caps how many records one sweep drops (an on-request
-        path calls this with a budget so a huge stale backlog cannot stall the
-        event loop; the background sweep keeps ``None`` and fully converges).
-        Left-over expired records are picked up by the next sweep.
+        ``max_remove`` caps how many records one sweep drops *individually* (an
+        on-request path calls this with a budget so a huge stale backlog cannot
+        stall the event loop); a full or mass (>= half) expiry still takes the
+        single O(n) clear/rebuild path regardless, which is cheaper than
+        re-scanning the table once per removed batch. Left-over expired records
+        are picked up by the next sweep.
         """
         now = now if now is not None else time.monotonic()
         # Expiry is the bare ``now >= r.expires_at`` comparison: the sweep is
         # called with a resolved ``now``, so there is no per-record method call
         # to wrap it (one Python call less per record from the TTL sweep).
         expired = [k for k, r in self._records.items() if now >= r.expires_at]
-        if max_remove is not None and len(expired) > max_remove:
-            expired = expired[:max_remove]
         if not expired:
             return 0
         total = len(self._records)
+        # Decide the bulk paths on the UNTRUNCATED count. ``max_remove`` bounds
+        # the per-record Python removals of a *small* partial expiry, but must
+        # not defeat the O(n) clear/rebuild when a large fraction is stale (a
+        # mass expiry after a partition or restart): truncating first would make
+        # the background loop rescan the whole table once per removed batch,
+        # O((k/budget)*n) instead of a single O(n) pass.
         if len(expired) == total:
             # Full expiry: drop every structure in one C-level pass instead of
             # N dict deletes plus an index rebuild (the DB-equivalent of TRUNCATE).
@@ -369,9 +375,12 @@ class RoutingTable:
             self._pos.clear()
             self._per_bucket.clear()
             return total
+        mass_expiry = len(expired) * 2 >= total
+        if not mass_expiry and max_remove is not None and len(expired) > max_remove:
+            expired = expired[:max_remove]
         for key in expired:
             del self._records[key]
-        if len(expired) * 2 >= total:
+        if mass_expiry:
             # Mass expiry: one bulk rebuild beats N swap-removes + set discards.
             self._rebuild_indexes()
         else:

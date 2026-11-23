@@ -1403,6 +1403,56 @@ def test_pruning_releases_the_bucket_accounting_on_both_paths() -> None:
     assert table.upsert(record("All200000000000000000", 1_000.0)) is True
 
 
+def test_prune_mass_expiry_is_not_defeated_by_max_remove() -> None:
+    """A full/mass expiry takes the O(n) bulk path even with a removal budget.
+
+    Regression: ``max_remove`` used to truncate the expired list *before* the
+    bulk-path decision, so a mass expiry (partition/restart) removed only the
+    budget per sweep and rescanned the whole table once per batch —
+    O((k/budget)*n) instead of one O(n) pass; the background loop then stalled
+    on a large table.
+    """
+    from hsync_rendezvous.routing import PeerRecord, RoutingTable
+
+    def record(cid: str, expires_at: float) -> PeerRecord:
+        return PeerRecord(
+            cid=cid,
+            bucket="shared",
+            group=None,
+            ip="10.0.0.1",
+            cert_fp=FP,
+            version="1.0.0",
+            endpoints=(),
+            expires_at=expires_at,
+        )
+
+    # Full expiry with a small budget: the clear path removes ALL in one call.
+    table = RoutingTable()
+    for index in range(10):
+        assert table.upsert(record(f"Full{index:017d}", 900.0)) is True
+    assert table.prune(now=1_000.0, max_remove=2) == 10
+    assert table.count() == 0
+
+    # Mass expiry (>= half) with a small budget: the rebuild path removes the
+    # whole expired set, leaving only the fresh records.
+    table = RoutingTable()
+    for index in range(6):
+        assert table.upsert(record(f"Mass{index:017d}", 900.0)) is True
+    for index in range(4):
+        assert table.upsert(record(f"Live{index:017d}", 2_000.0)) is True
+    assert table.prune(now=1_000.0, max_remove=2) == 6
+    assert table.count() == 4
+
+    # A small partial expiry still respects the budget (one at a time).
+    table = RoutingTable()
+    for index in range(10):
+        assert table.upsert(record(f"Part{index:017d}", 900.0 if index < 2 else 2_000.0)) is True
+    assert table.prune(now=1_000.0, max_remove=1) == 1
+    assert table.count() == 9
+    assert table.prune(now=1_000.0, max_remove=1) == 1
+    assert table.count() == 8
+
+
 def test_relayed_peer_endpoints_are_capped() -> None:
     """A register may advertise 16 candidates; the relay carries the first four."""
     from hsync_rendezvous.protocol import MAX_RELAY_ENDPOINTS
