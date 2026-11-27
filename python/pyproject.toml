@@ -90,7 +90,7 @@ ignore = [
 "src/hsync_rendezvous/upnp.py" = ["RUF022"]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 25
+max-complexity = 15
 
 [tool.mypy]
 python_version = "3.13"

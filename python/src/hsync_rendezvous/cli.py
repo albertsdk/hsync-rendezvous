@@ -692,6 +692,58 @@ def identity_rotate(
     )
 
 
+async def _bind_transports(
+    *,
+    host: str,
+    ports: list[int],
+    handler: RendezvousHandler,
+    identity: NodeIdentity | None,
+    connection_guard: ConnectionGuard | None,
+    udp: bool,
+    tcp: bool,
+) -> tuple[list[Any], list[int], NodeIdentity | None, list[BindError]]:
+    """Bind every enabled transport; return the servers, ports and failures."""
+    specs = (
+        (
+            "udp",
+            udp,
+            "the QUIC/UDP listener",
+            "Check --listen-host/--listen-port; ports below 1024 need "
+            "root or CAP_NET_BIND_SERVICE.",
+        ),
+        (
+            "tcp",
+            tcp,
+            "the TLS/TCP listener",
+            "Check --listen-host/--listen-port; ports below 1024 need "
+            "root or CAP_NET_BIND_SERVICE. TCP 443 may already be held by a "
+            "co-hosted HTTPS server — run the node QUIC-only with --no-tcp.",
+        ),
+    )
+    servers: list[Any] = []
+    bound_ports: list[int] = []
+    resolved_identity = identity
+    bind_errors: list[BindError] = []
+    for proto, enabled, what, bind_advice in specs:
+        if not enabled:
+            continue
+        new_servers, new_ports, resolved_identity, failure = await _bind_transport(
+            proto=proto,
+            host=host,
+            ports=ports,
+            handler=handler,
+            identity=resolved_identity,
+            connection_guard=connection_guard,
+            what=what,
+            bind_advice=bind_advice,
+        )
+        if failure is not None:
+            bind_errors.append(failure)
+        servers.extend(new_servers)
+        bound_ports.extend(new_ports)
+    return servers, bound_ports, resolved_identity, bind_errors
+
+
 async def _async_main(
     host: str,
     ports: list[int],
@@ -726,44 +778,15 @@ async def _async_main(
         if enforce_rate_limits
         else None
     )
-    servers: list[Any] = []
-    bound_ports: list[int] = []
-    resolved_identity = identity
-    bind_errors: list[BindError] = []
-    transport_specs = (
-        (
-            "udp",
-            udp,
-            "the QUIC/UDP listener",
-            "Check --listen-host/--listen-port; ports below 1024 need "
-            "root or CAP_NET_BIND_SERVICE.",
-        ),
-        (
-            "tcp",
-            tcp,
-            "the TLS/TCP listener",
-            "Check --listen-host/--listen-port; ports below 1024 need "
-            "root or CAP_NET_BIND_SERVICE. TCP 443 may already be held by a "
-            "co-hosted HTTPS server — run the node QUIC-only with --no-tcp.",
-        ),
+    servers, bound_ports, resolved_identity, bind_errors = await _bind_transports(
+        host=host,
+        ports=ports,
+        handler=handler,
+        identity=identity,
+        connection_guard=connection_guard,
+        udp=udp,
+        tcp=tcp,
     )
-    for proto, enabled, what, bind_advice in transport_specs:
-        if not enabled:
-            continue
-        new_servers, new_ports, resolved_identity, failure = await _bind_transport(
-            proto=proto,
-            host=host,
-            ports=ports,
-            handler=handler,
-            identity=resolved_identity,
-            connection_guard=connection_guard,
-            what=what,
-            bind_advice=bind_advice,
-        )
-        if failure is not None:
-            bind_errors.append(failure)
-        servers.extend(new_servers)
-        bound_ports.extend(new_ports)
     if not servers:
         # Nothing bound on any enabled transport: fail exactly as the
         # single-transport node did (exit 3), naming the transport that failed.

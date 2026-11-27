@@ -41,4 +41,4 @@ ignore = [
 "bench/**" = ["ARG001", "ARG005", "RUF059", "PIE810", "PLW1510", "PLW0108", "PERF401"]
 
 [lint.mccabe]
-max-complexity = 25
+max-complexity = 15
