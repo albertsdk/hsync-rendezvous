@@ -36,7 +36,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "python" / "src"))
 sys.path.insert(0, str(_REPO_ROOT / "tests"))
 
-from common import (  # noqa: E402
+from common import (
     BenchResult,
     add_json_out,
     make_cids,
@@ -44,14 +44,14 @@ from common import (  # noqa: E402
     measure,
     print_table,
 )
-from harness import (  # noqa: E402
+from harness import (
     leave_frame,
     query_frame,
     refresh_frame,
     register_frame,
 )
-from hsync_rendezvous.handler import RendezvousHandler  # noqa: E402
-from hsync_rendezvous.resources import ResourceLimits  # noqa: E402
+from hsync_rendezvous.handler import RendezvousHandler
+from hsync_rendezvous.resources import ResourceLimits
 
 _PEER_IP = "198.51.100.7"
 _PEER_PORT = 54321

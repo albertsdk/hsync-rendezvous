@@ -195,7 +195,7 @@ def main(
     """HSYNC P2P rendezvous node: no-log, in-memory, zero-knowledge (rdv/1)."""
     if version:
         typer.echo(f"hsync-rendezvous {__version__} (rdv/1, Python v1)")
-        raise typer.Exit()
+        raise typer.Exit
 
 
 def _parse_port_list(raw: str) -> list[int]:

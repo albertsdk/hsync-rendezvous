@@ -5,17 +5,36 @@ line-length = 100
 target-version = "py313"
 
 [lint]
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
-ignore = [
-    "E501",
-    "E402",
-    "B904",
-    "SIM115",
-    "SIM117",
-    "B008",
-    "B017",
-    "SIM101",
-    "SIM103",
-    "SIM105",
-    "SIM118",
+select = [
+    "E", "F", "W",
+    "I",
+    "N",
+    "UP",
+    "B", "A", "C4",
+    "ISC", "ICN",
+    "PIE", "RET", "RSE",
+    "SIM", "TID",
+    "ARG", "PERF",
+    "FURB", "RUF",
+    "PGH", "LOG", "G",
+    "PL", "T10", "ERA",
 ]
+ignore = [
+    # pre-existing
+    "E501", "E402", "B904", "B008", "B017",
+    "SIM115", "SIM117", "SIM102", "SIM105", "SIM101", "SIM103", "SIM118",
+    # deliberate patterns / opinionated rules
+    "ARG002", "EM101", "EM102", "TRY003", "N818",
+    "PLC0415", "PLW0603", "PLR2004",
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",
+    "PTH", "DTZ005", "ERA001", "RUF002", "RUF003",
+    "ARG001", "ARG005",
+]
+
+[lint.per-file-ignores]
+"tests/**" = [
+    "ARG004", "RUF059", "RUF012", "RUF007", "RUF015", "RUF005", "RUF010",
+    "RUF046", "PLR0402", "PLW0108", "PLW1510", "PLW2901", "RET501", "RET504",
+    "PLR1711", "PIE807", "PIE808", "FURB171", "ICN001", "RSE102", "PERF401",
+]
+"bench/**" = ["ARG001", "ARG005", "RUF059", "PIE810", "PLW1510", "PLW0108", "PERF401"]

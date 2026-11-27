@@ -31,8 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from aioquic.asyncio import connect  # noqa: E402
-from common import (  # noqa: E402
+from aioquic.asyncio import connect
+from common import (
     BenchResult,
     add_json_out,
     make_cids,
@@ -40,7 +40,7 @@ from common import (  # noqa: E402
     print_table,
     timed_query,
 )
-from harness import (  # noqa: E402
+from harness import (
     RdvTcpClient,
     client_config,
     open_session,

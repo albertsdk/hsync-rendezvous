@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from common import (  # noqa: E402
+from common import (
     add_json_out,
     cpu_percent,
     format_cpu,
@@ -42,7 +42,7 @@ from common import (  # noqa: E402
     proc_cpu_seconds,
     proc_rss_mb,
 )
-from harness import (  # noqa: E402
+from harness import (
     leave_frame,
     open_session,
     query_frame,
@@ -96,7 +96,7 @@ async def _soak(
                 else:
                     await _send(client, leave_frame(live.pop(0), "shared"), False)
                 ops += 1
-            except Exception as exc:  # noqa: BLE001 - soak must record, not crash
+            except Exception as exc:
                 errors += 1
                 print(f"op error ({type(exc).__name__}): {exc}")
             now = time.monotonic()

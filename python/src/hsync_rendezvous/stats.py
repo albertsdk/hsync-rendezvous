@@ -38,8 +38,8 @@ __all__ = [
     "DROP_REASONS",
     "LIMITERS",
     "METRICS_OUTCOMES",
-    "NodeStats",
     "REFUSAL_REASONS",
+    "NodeStats",
 ]
 
 # Outcomes the metrics endpoint can answer, in exposition order. The set is

@@ -30,14 +30,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from aioquic.asyncio import connect  # noqa: E402
-from common import (  # noqa: E402
+from aioquic.asyncio import connect
+from common import (
     BenchResult,
     add_json_out,
     maybe_write_json,
     print_table,
 )
-from harness import client_config, start_rendezvous, terminate  # noqa: E402
+from harness import client_config, start_rendezvous, terminate
 
 # Kept <= 28 chars so print_table's column alignment holds.
 _HANDSHAKE = "handshake(enter)"

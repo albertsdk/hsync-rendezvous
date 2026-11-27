@@ -51,8 +51,6 @@ from hsync_rendezvous.tcp import (
 from hsync_rendezvous.tls import build_tls_context
 
 __all__ = [
-    "RDV_ALPN",
-    "RDV_IDLE_TIMEOUT",
     "CONNECTION_ACTIVE_MAX_PER_IP",
     "HANDSHAKE_BURST_PER_IP",
     "HANDSHAKE_RATE_PER_SECOND",
@@ -61,11 +59,13 @@ __all__ = [
     "MAX_RELAY_STREAMS_PER_CONNECTION",
     "MAX_SESSIONS_PER_CONNECTION",
     "MAX_STREAM_DATA_BYTES",
-    "RendezvousQuicProtocol",
-    "RendezvousTcpProtocol",
+    "RDV_ALPN",
+    "RDV_IDLE_TIMEOUT",
     "ConnectionGuard",
     "IdentityError",
     "NodeIdentity",
+    "RendezvousQuicProtocol",
+    "RendezvousTcpProtocol",
     "build_quic_configuration",
     "build_tls_context",
     "load_identity",

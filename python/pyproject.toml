@@ -47,8 +47,46 @@ line-length = 100
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
-ignore = ["E501", "E402", "B904", "SIM115", "SIM117", "B008", "B017", "SIM101", "SIM103", "SIM105", "SIM118"]
+# Curated best-practice set shared across the hsync Python projects (see
+# hsync-common/pyproject.toml for the rationale).
+select = [
+    "E", "F", "W",
+    "I",
+    "N",
+    "UP",
+    "B", "A", "C4",
+    "ISC", "ICN",
+    "PIE", "RET", "RSE",
+    "SIM", "TID",
+    "ARG", "PERF",
+    "FURB", "RUF",
+    "PGH", "LOG", "G",
+    "PL", "T10", "ERA",
+]
+ignore = [
+    # pre-existing
+    "E501", "E402", "B904", "B008", "B017",
+    "SIM115", "SIM117", "SIM102", "SIM105", "SIM101", "SIM103", "SIM118",
+    # deliberate patterns / opinionated rules
+    "ARG002", "EM101", "EM102", "TRY003", "N818",
+    "PLC0415", "PLW0603", "PLR2004",
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",
+    "PTH", "DTZ005", "ERA001", "RUF002", "RUF003",
+    # rendezvous-specific: callbacks keep otherwise-unused arguments, same-name
+    # aliases mark deliberate re-exports, and lists use multi-line concatenation.
+    "ARG001", "ARG005", "ISC004", "PLC0414",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "ARG004", "RUF059", "RUF012", "RUF007", "RUF015", "RUF005", "RUF010",
+    "RUF046", "PLR0402", "PLW0108", "PLW1510", "PLW2901", "RET501", "RET504",
+    "PLR1711", "PIE807", "PIE808", "PIE810", "FURB171", "ICN001", "RSE102",
+    "PERF401",
+]
+"fuzz/**" = ["PERF401"]
+# The upnp ``__all__`` groups the service classes before the functions.
+"src/hsync_rendezvous/upnp.py" = ["RUF022"]
 
 [tool.mypy]
 python_version = "3.13"

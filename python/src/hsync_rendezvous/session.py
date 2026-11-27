@@ -86,7 +86,7 @@ async def serve_rdv_session(
         raise
     except (ConnectionError, TimeoutError, OSError):
         return
-    except Exception as exc:  # noqa: BLE001 - one session must not take the node down
+    except Exception as exc:
         # Unexpected failure in one session: the listener and every other session
         # stay up (isolation), but the operator must still see it — the always-on
         # error channel carries the exception CLASS only, no peer identity.

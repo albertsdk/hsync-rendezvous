@@ -44,20 +44,20 @@ from typing import Any
 
 from pydantic import SecretStr
 
-import hsync_rendezvous.upnp as upnp
+from hsync_rendezvous import upnp
 from hsync_rendezvous.handler import RendezvousHandler
 from hsync_rendezvous.tokens import derive_bucket_token, is_valid_bucket_token, verify_bucket_token
 
 __all__ = [
-    "Finding",
     "PEER_IP",
     "PEER_PORT",
     "PROBE_CID",
     "PROBE_FP",
+    "Finding",
     "assert_reply",
     "depth_bombs",
-    "fresh_handler",
     "frame_batch",
+    "fresh_handler",
     "generate_input",
     "handle_one",
     "mutate_bytes",
@@ -363,7 +363,7 @@ def handle_one(handler: RendezvousHandler, raw: bytes) -> bytes | None:
     """
     try:
         out = handler.handle(raw, peer_ip=PEER_IP, peer_port=PEER_PORT)
-    except Exception as exc:  # noqa: BLE001 - any escape IS the finding
+    except Exception as exc:
         raise Finding(f"handle raised {type(exc).__name__}: {exc} — input={render(raw)}") from exc
     track_accepts(raw, out)
     assert_reply(raw, out)

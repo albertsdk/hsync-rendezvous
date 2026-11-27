@@ -296,7 +296,7 @@ async def test_sigterm_under_load_exits_cleanly(rendezvous_factory, bucket, rng)
             while True:
                 try:
                     await client.exchange(query_frame(bucket), timeout=1.0)
-                except Exception:  # noqa: BLE001 - the node shutting down ends the loop
+                except Exception:
                     return
 
         load = asyncio.create_task(hammer())

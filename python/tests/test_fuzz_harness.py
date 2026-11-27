@@ -18,7 +18,7 @@ import pytest
 FUZZ_DIR = Path(__file__).resolve().parents[1] / "fuzz"
 sys.path.insert(0, str(FUZZ_DIR))
 
-import fuzz_boot  # noqa: E402
+import fuzz_boot
 
 
 def test_fuzz_burst_decoder_ssdp_token() -> None:

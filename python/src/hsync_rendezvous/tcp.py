@@ -239,7 +239,7 @@ class TcpListener:
     async def _serve(self, protocol: RendezvousTcpProtocol, conn: socket.socket) -> None:
         try:
             await protocol.serve_accepted(conn)
-        except Exception as exc:  # noqa: BLE001 - one connection must not stop the listener
+        except Exception as exc:
             debug_event("tcp session failed", exc=type(exc).__name__)
             with contextlib.suppress(OSError):
                 conn.close()

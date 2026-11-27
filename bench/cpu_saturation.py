@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from common import (  # noqa: E402
+from common import (
     add_json_out,
     cpu_percent,
     format_cpu,
@@ -46,7 +46,7 @@ from common import (  # noqa: E402
     proc_cpu_seconds,
     timed_query,
 )
-from harness import (  # noqa: E402
+from harness import (
     open_session,
     query_frame,
     register_frame,

@@ -383,7 +383,7 @@ def _patch_run_no_side_effects(monkeypatch, start_servers) -> None:
 
 
 def test_bind_permission_denied_is_actionable(monkeypatch) -> None:
-    async def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _boom(*args, **kwargs):
         # aioquic wraps the real error: no errno on the outer OSError.
         raise OSError("could not bind to local_addr ('0.0.0.0', 443)") from PermissionError(
             errno.EACCES, "Permission denied"
@@ -400,7 +400,7 @@ def test_bind_permission_denied_is_actionable(monkeypatch) -> None:
 
 
 def test_bind_address_in_use_is_actionable(monkeypatch) -> None:
-    async def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _boom(*args, **kwargs):
         raise OSError(errno.EADDRINUSE, "Address already in use")
 
     _patch_run_no_side_effects(monkeypatch, _boom)
@@ -413,7 +413,7 @@ def test_bind_address_in_use_is_actionable(monkeypatch) -> None:
 
 
 def test_bind_bad_host_is_actionable(monkeypatch) -> None:
-    async def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _boom(*args, **kwargs):
         raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
 
     _patch_run_no_side_effects(monkeypatch, _boom)
@@ -502,7 +502,7 @@ class _FakeServer:
 def test_ready_file_failure_is_actionable_exit_4(monkeypatch, tmp_path) -> None:
     """An unwritable --ready-file exits 4 with an actionable message, no traceback."""
 
-    async def _start(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _start(*args, **kwargs):
         return [_FakeServer()], [8443], _FakeIdentity(), []
 
     _patch_run_no_side_effects(monkeypatch, _start)
@@ -523,7 +523,7 @@ def test_ready_file_failure_is_actionable_exit_4(monkeypatch, tmp_path) -> None:
 def test_ready_file_conflict_leaves_the_existing_file_alone(monkeypatch, tmp_path) -> None:
     """A pre-existing path is refused (O_EXCL) and never deleted by the node."""
 
-    async def _start(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _start(*args, **kwargs):
         return [_FakeServer()], [8443], _FakeIdentity(), []
 
     _patch_run_no_side_effects(monkeypatch, _start)
@@ -546,7 +546,7 @@ def test_debug_run_announces_the_peer_aware_stream(monkeypatch, tmp_path) -> Non
     announcement, so the assertion does not depend on a serving process.
     """
 
-    async def _start(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _start(*args, **kwargs):
         return [_FakeServer()], [8443], _FakeIdentity(), []
 
     _patch_run_no_side_effects(monkeypatch, _start)

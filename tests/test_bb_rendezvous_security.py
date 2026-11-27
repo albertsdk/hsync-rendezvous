@@ -422,7 +422,7 @@ async def test_connection_flood_keeps_node_serving(rendezvous_factory, bucket, r
         try:
             await asyncio.wait_for(_shake(), timeout=15.0)
             return True
-        except Exception:  # noqa: BLE001 - refused handshakes are the expected outcome
+        except Exception:
             return False
 
     # When: a concurrent handshake flood arrives from one source IP
@@ -455,7 +455,7 @@ async def test_wrong_alpn_cannot_reach_boot_frames(rendezvous_factory, bucket, r
     transport = protocol = None
     try:
         transport, protocol = await _connect_from("127.0.0.1", handle.port, config=config)
-    except Exception:  # noqa: BLE001 - handshake failure is the expected outcome
+    except Exception:
         protocol = None
     if protocol is not None:
         # Defensive: had the handshake completed, no rdv/1 frame may be answered

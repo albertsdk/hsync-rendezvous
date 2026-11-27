@@ -41,16 +41,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "python" / "src"))
 sys.path.insert(0, str(_REPO_ROOT / "tests"))
 
-from common import add_json_out, make_cid, make_cids, proc_rss_mb  # noqa: E402
-from harness import (  # noqa: E402
+from common import add_json_out, make_cid, make_cids, proc_rss_mb
+from harness import (
     RdvClient,
     register_frame,
     start_rendezvous,
     terminate,
 )
-from hsync_common.ratelimit import TokenBucketLimiter  # noqa: E402
-from hsync_rendezvous.handler import RendezvousHandler  # noqa: E402
-from hsync_rendezvous.routing import PeerRecord, RoutingTable  # noqa: E402
+from hsync_common.ratelimit import TokenBucketLimiter
+from hsync_rendezvous.handler import RendezvousHandler
+from hsync_rendezvous.routing import PeerRecord, RoutingTable
 
 
 def _retained(build: Callable[[], object]) -> tuple[int, object]:

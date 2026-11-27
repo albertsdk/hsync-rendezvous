@@ -288,7 +288,7 @@ class RendezvousHandler:
         peer_ip: str,
         peer_port: int,
         proto: BucketProto = "udp",
-    ) -> bytes | None | RelayHandoff:
+    ) -> bytes | RelayHandoff | None:
         """Process one raw NDJSON frame; return the reply, a relay handoff or ``None``.
 
         Malformed / unknown frames are silently dropped (no-log, no oracle). A
@@ -365,7 +365,7 @@ class RendezvousHandler:
 
     def _dispatch(
         self, frame: RdvFrame, peer_ip: str, peer_port: int, proto: BucketProto = "udp"
-    ) -> bytes | None | RelayHandoff:
+    ) -> bytes | RelayHandoff | None:
         """Route a validated frame to its handler (``leave``/``ping`` produce no reply)."""
         match frame:
             case RdvRegister():

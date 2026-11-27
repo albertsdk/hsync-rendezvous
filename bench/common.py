@@ -20,19 +20,19 @@ from typing import Any
 
 __all__ = [
     "ALPHABET",
-    "make_cid",
-    "make_cids",
-    "measure",
-    "timed_query",
     "BenchResult",
-    "print_table",
     "add_json_out",
-    "maybe_write_json",
-    "percentile",
-    "proc_cpu_seconds",
-    "proc_rss_mb",
     "cpu_percent",
     "format_cpu",
+    "make_cid",
+    "make_cids",
+    "maybe_write_json",
+    "measure",
+    "percentile",
+    "print_table",
+    "proc_cpu_seconds",
+    "proc_rss_mb",
+    "timed_query",
 ]
 
 # CID alphabet (spec: ^[A-Za-z0-9]{21}$).

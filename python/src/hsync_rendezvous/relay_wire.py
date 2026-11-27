@@ -46,7 +46,7 @@ def close_writer(writer: Any) -> None:
     try:
         if not writer.is_closing():
             writer.close()
-    except Exception:  # noqa: BLE001 - teardown must never raise
+    except Exception:
         return
 
 
@@ -64,7 +64,7 @@ def is_ping(raw: bytes, cid: str, bucket: str) -> bool:
     """Whether ``raw`` is a ``relay_ping`` for this listener (never logged)."""
     try:
         frame = RDV_FRAME_ADAPTER.validate_json(raw)
-    except Exception:  # noqa: BLE001 - any validation failure is a violation
+    except Exception:
         return False
     return isinstance(frame, RdvRelayPing) and frame.cid == cid and frame.bucket == bucket
 
