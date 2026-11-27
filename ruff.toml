@@ -18,6 +18,7 @@ select = [
     "FURB", "RUF",
     "PGH", "LOG", "G",
     "PL", "T10", "ERA",
+    "C90",
 ]
 ignore = [
     # pre-existing
@@ -38,3 +39,6 @@ ignore = [
     "PLR1711", "PIE807", "PIE808", "FURB171", "ICN001", "RSE102", "PERF401",
 ]
 "bench/**" = ["ARG001", "ARG005", "RUF059", "PIE810", "PLW1510", "PLW0108", "PERF401"]
+
+[lint.mccabe]
+max-complexity = 25

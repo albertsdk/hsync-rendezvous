@@ -62,6 +62,7 @@ select = [
     "FURB", "RUF",
     "PGH", "LOG", "G",
     "PL", "T10", "ERA",
+    "C90",
 ]
 ignore = [
     # pre-existing
@@ -87,6 +88,9 @@ ignore = [
 "fuzz/**" = ["PERF401"]
 # The upnp ``__all__`` groups the service classes before the functions.
 "src/hsync_rendezvous/upnp.py" = ["RUF022"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
 
 [tool.mypy]
 python_version = "3.13"
